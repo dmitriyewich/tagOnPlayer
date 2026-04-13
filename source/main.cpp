@@ -469,22 +469,50 @@ bool InstallHooks() {
     return true;
 }
 
-void LoadConfig() {
-    char modulePath[MAX_PATH] = {};
-    if (GetModuleFileNameA(g_state.pluginModule, modulePath, MAX_PATH) == 0) {
-        return;
-    }
-
+void BuildDirFromPath(char* dirOut, const char* filePath) {
+    std::memcpy(dirOut, filePath, MAX_PATH);
     char* lastSlash = nullptr;
-    for (char* p = modulePath; *p; ++p) {
+    for (char* p = dirOut; *p; ++p) {
         if (*p == '\\' || *p == '/') lastSlash = p;
     }
     if (lastSlash) {
         *(lastSlash + 1) = '\0';
+    } else {
+        dirOut[0] = '\0';
+    }
+}
+
+void LoadConfig() {
+    char modulePath[MAX_PATH] = {};
+    bool found = false;
+
+    if (GetModuleFileNameA(g_state.pluginModule, modulePath, MAX_PATH) != 0) {
+        found = true;
     }
 
+    if (!found) {
+        HMODULE resolvedModule = nullptr;
+        if (GetModuleHandleExA(
+                GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                reinterpret_cast<LPCSTR>(&LoadConfig),
+                &resolvedModule)
+            && resolvedModule != nullptr
+            && GetModuleFileNameA(resolvedModule, modulePath, MAX_PATH) != 0) {
+            found = true;
+        }
+    }
+
+    if (!found) {
+        if (GetModuleFileNameA(nullptr, modulePath, MAX_PATH) == 0) {
+            return;
+        }
+    }
+
+    char dirPath[MAX_PATH] = {};
+    BuildDirFromPath(dirPath, modulePath);
+
     char iniPath[MAX_PATH] = {};
-    _snprintf_s(iniPath, _TRUNCATE, "%stagOnPlayer.ini", modulePath);
+    _snprintf_s(iniPath, _TRUNCATE, "%stagOnPlayer.ini", dirPath);
 
     char commandBuf[64] = {};
     GetPrivateProfileStringA(kConfigSection, kConfigKeyCommand, "", commandBuf, sizeof(commandBuf), iniPath);
