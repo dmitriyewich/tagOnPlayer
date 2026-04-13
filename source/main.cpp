@@ -20,7 +20,6 @@ namespace {
 constexpr DWORD kGtaLoadState = 0x00C8D4C0;
 constexpr std::uintptr_t kCamera = 0x00B6F028;
 constexpr std::size_t kDrawHookSize = 9;
-constexpr std::size_t kSendHookSize = 13;
 constexpr unsigned int kHeadBone = 8;
 constexpr D3DCOLOR kWhite = 0xFFFFFFFFu;
 constexpr char kIniName[] = "tagOnPlayer.ini";
@@ -36,7 +35,7 @@ struct Camera { Placeable placeable; };
 
 struct Ver {
     DWORD ep;
-    std::uint32_t net, tags, label_loop, bar_loop, send_command;
+    std::uint32_t net, tags, label_loop, bar_loop, send_command, send_call1, send_call2;
     std::uint32_t begin_label, end_label, draw_label, begin_bar, end_bar, draw_bar;
     std::uint32_t get_pool, get_local, get_name, get_color;
     std::uint32_t ped_on_screen, get_health, get_armour, get_bone, local_id, local_ped;
@@ -44,15 +43,15 @@ struct Ver {
 
 #define VER(...) { __VA_ARGS__ }
 const Ver kVer[] = {
-    // ep, net, tags, label_loop, bar_loop, send_command, begin_label, end_label, draw_label, begin_bar, end_bar, draw_bar, get_pool, get_local, get_name, get_color, ped_on_screen, get_health, get_armour, get_bone, local_id, local_ped
-    VER(0x31DF13, 0x0021A0F8, 0x0021A0B0, 0x00070D40, 0x0006FC30, 0x00065C60, 0x000686A0, 0x000686B0, 0x000686C0, 0x00068FD0, 0x00068670, 0x000689C0, 0x00001160, 0x00001A30, 0x00013CE0, 0x00003D90, 0x000A65A0, 0x000A6610, 0x000A6650, 0x000A8D70, 0x00000004, 0x00000000), // R1
-    VER(0x3195DD, 0x0021A100, 0x0021A0B8, 0x00070DE0, 0x0006FCD0, 0x00065D30, 0x00068770, 0x00068780, 0x00068790, 0x000690A0, 0x00068740, 0x00068A90, 0x00001170, 0x00001A40, 0x00013DA0, 0x00003DA0, 0x000A6770, 0x000A67E0, 0x000A6820, 0x000A8F40, 0x00000000, 0x00000000), // R2
-    VER(0x0CC490, 0x0026E8DC, 0x0026E890, 0x00074C30, 0x00073B20, 0x00069190, 0x0006C610, 0x0006C620, 0x0006C630, 0x0006CF40, 0x0006C5E0, 0x0006C930, 0x00001160, 0x00001A30, 0x00016F00, 0x00003DA0, 0x000AB430, 0x000AB480, 0x000AB4C0, 0x000ADC00, 0x00002F1C, 0x00000000), // R3
-    VER(0x0CC4D0, 0x0026E8DC, 0x0026E890, 0x00074C30, 0x00073B20, 0x00069190, 0x0006C610, 0x0006C620, 0x0006C630, 0x0006CF40, 0x0006C5E0, 0x0006C930, 0x00001160, 0x00001A30, 0x00016F00, 0x00003DA0, 0x000AB450, 0x000AB4C0, 0x000AB500, 0x000ADBF0, 0x00002F1C, 0x00000000), // R3-1
-    VER(0x0CBCB0, 0x0026EA0C, 0x0026E9C0, 0x00075360, 0x00074240, 0x000698C0, 0x0006CD40, 0x0006CD50, 0x0006CD60, 0x0006D670, 0x0006CD10, 0x0006D060, 0x00001170, 0x00001A40, 0x00017570, 0x00003F10, 0x000ABCF0, 0x000ABD60, 0x000ABDA0, 0x000AE490, 0x0000000C, 0x00000104), // R4
-    VER(0x0CBCD0, 0x0026EA0C, 0x0026E9C0, 0x00075390, 0x00074270, 0x00069900, 0x0006CD80, 0x0006CD90, 0x0006CDA0, 0x0006D6B0, 0x0006CD50, 0x0006D0A0, 0x00001170, 0x00001A40, 0x000175C0, 0x00003F20, 0x000ABD20, 0x000ABD90, 0x000ABDD0, 0x000AE4C0, 0x00000004, 0x00000104), // R4-2
-    VER(0x0CBC90, 0x0026EB94, 0x0026EB48, 0x00075330, 0x00074210, 0x00069900, 0x0006CD80, 0x0006CD90, 0x0006CDA0, 0x0006D6B0, 0x0006CD50, 0x0006D0A0, 0x00001170, 0x00001A40, 0x000175C0, 0x00003F20, 0x000ABCE0, 0x000ABD50, 0x000ABD90, 0x000AE480, 0x00000004, 0x00000104), // R5-1
-    VER(0x0FDB60, 0x002ACA24, 0x002AC9D8, 0x00074DC0, 0x00073CB0, 0x00069340, 0x0006C7C0, 0x0006C7D0, 0x0006C7E0, 0x0006D0F0, 0x0006C790, 0x0006CAE0, 0x00001170, 0x00001A80, 0x000170D0, 0x00003E20, 0x000AB900, 0x000AB970, 0x000AB9B0, 0x000AE080, 0x00000000, 0x00000000), // DL-R1
+    // ep, net, tags, label_loop, bar_loop, send_command, send_call1, send_call2, begin_label, end_label, draw_label, begin_bar, end_bar, draw_bar, get_pool, get_local, get_name, get_color, ped_on_screen, get_health, get_armour, get_bone, local_id, local_ped
+    VER(0x31DF13, 0x0021A0F8, 0x0021A0B0, 0x00070D40, 0x0006FC30, 0x00065C60, 0x00065DF8, 0x00065E45, 0x000686A0, 0x000686B0, 0x000686C0, 0x00068FD0, 0x00068670, 0x000689C0, 0x00001160, 0x00001A30, 0x00013CE0, 0x00003D90, 0x000A65A0, 0x000A6610, 0x000A6650, 0x000A8D70, 0x00000004, 0x00000000), // R1
+    VER(0x3195DD, 0x0021A100, 0x0021A0B8, 0x00070DE0, 0x0006FCD0, 0x00065D30, 0x00065EC8, 0x00065F15, 0x00068770, 0x00068780, 0x00068790, 0x000690A0, 0x00068740, 0x00068A90, 0x00001170, 0x00001A40, 0x00013DA0, 0x00003DA0, 0x000A6770, 0x000A67E0, 0x000A6820, 0x000A8F40, 0x00000000, 0x00000000), // R2
+    VER(0x0CC490, 0x0026E8DC, 0x0026E890, 0x00074C30, 0x00073B20, 0x00069190, 0x00069328, 0x00069375, 0x0006C610, 0x0006C620, 0x0006C630, 0x0006CF40, 0x0006C5E0, 0x0006C930, 0x00001160, 0x00001A30, 0x00016F00, 0x00003DA0, 0x000AB430, 0x000AB480, 0x000AB4C0, 0x000ADC00, 0x00002F1C, 0x00000000), // R3
+    VER(0x0CC4D0, 0x0026E8DC, 0x0026E890, 0x00074C30, 0x00073B20, 0x00069190, 0x00069328, 0x00069375, 0x0006C610, 0x0006C620, 0x0006C630, 0x0006CF40, 0x0006C5E0, 0x0006C930, 0x00001160, 0x00001A30, 0x00016F00, 0x00003DA0, 0x000AB450, 0x000AB4C0, 0x000AB500, 0x000ADBF0, 0x00002F1C, 0x00000000), // R3-1
+    VER(0x0CBCB0, 0x0026EA0C, 0x0026E9C0, 0x00075360, 0x00074240, 0x000698C0, 0x00069A58, 0x00069AA5, 0x0006CD40, 0x0006CD50, 0x0006CD60, 0x0006D670, 0x0006CD10, 0x0006D060, 0x00001170, 0x00001A40, 0x00017570, 0x00003F10, 0x000ABCF0, 0x000ABD60, 0x000ABDA0, 0x000AE490, 0x0000000C, 0x00000104), // R4
+    VER(0x0CBCD0, 0x0026EA0C, 0x0026E9C0, 0x00075390, 0x00074270, 0x00069900, 0x00069A98, 0x00069AE5, 0x0006CD80, 0x0006CD90, 0x0006CDA0, 0x0006D6B0, 0x0006CD50, 0x0006D0A0, 0x00001170, 0x00001A40, 0x000175C0, 0x00003F20, 0x000ABD20, 0x000ABD90, 0x000ABDD0, 0x000AE4C0, 0x00000004, 0x00000104), // R4-2
+    VER(0x0CBC90, 0x0026EB94, 0x0026EB48, 0x00075330, 0x00074210, 0x00069900, 0x00069A98, 0x00069AE5, 0x0006CD80, 0x0006CD90, 0x0006CDA0, 0x0006D6B0, 0x0006CD50, 0x0006D0A0, 0x00001170, 0x00001A40, 0x000175C0, 0x00003F20, 0x000ABCE0, 0x000ABD50, 0x000ABD90, 0x000AE480, 0x00000004, 0x00000104), // R5-1
+    VER(0x0FDB60, 0x002ACA24, 0x002AC9D8, 0x00074DC0, 0x00073CB0, 0x00069340, 0x000694D8, 0x00069525, 0x0006C7C0, 0x0006C7D0, 0x0006C7E0, 0x0006D0F0, 0x0006C790, 0x0006CAE0, 0x00001170, 0x00001A80, 0x000170D0, 0x00003E20, 0x000AB900, 0x000AB970, 0x000AB9B0, 0x000AE080, 0x00000000, 0x00000000), // DL-R1
 };
 #undef VER
 
@@ -255,9 +254,14 @@ void __fastcall hook_send(std::uintptr_t self, void*, const char* text) {
     if (g_old_send) g_old_send(self, text);
 }
 
-DWORD WINAPI init(void*) {
-    static const std::uint8_t sig[] = { 0x64, 0xA1, 0x00, 0x00, 0x00, 0x00, 0x6A, 0xFF, 0x68 };
+bool patch_call(std::uint32_t call_off, const void* detour) {
+    auto* site = reinterpret_cast<std::uint8_t*>(g_base + call_off);
+    if (*site != 0xE8) return false;
+    const auto rel = static_cast<std::int32_t>(reinterpret_cast<std::intptr_t>(detour) - reinterpret_cast<std::intptr_t>(site + 5));
+    return patch(site + 1, &rel, sizeof(rel));
+}
 
+DWORD WINAPI init(void*) {
     const auto* state = reinterpret_cast<volatile DWORD*>(kGtaLoadState);
     while (*state < 9) Sleep(10);
     cfg();
@@ -269,12 +273,12 @@ DWORD WINAPI init(void*) {
     g_ver = detect(samp);
     if (!g_ver) return 0;
 
-    const auto* send = reinterpret_cast<const std::uint8_t*>(g_base + g_ver->send_command);
-    for (std::size_t i = 0; i != sizeof(sig); ++i) if (send[i] != sig[i]) return 0;
-
     if (!hook(g_ver->label_loop, reinterpret_cast<const void*>(&hook_label), kDrawHookSize, g_old_label)) return 0;
     if (!hook(g_ver->bar_loop, reinterpret_cast<const void*>(&hook_bar), kDrawHookSize, g_old_bar)) return 0;
-    if (!hook(g_ver->send_command, reinterpret_cast<const void*>(&hook_send), kSendHookSize, g_old_send)) return 0;
+
+    g_old_send = reinterpret_cast<SendCommand>(g_base + g_ver->send_command);
+    patch_call(g_ver->send_call1, reinterpret_cast<const void*>(&hook_send));
+    patch_call(g_ver->send_call2, reinterpret_cast<const void*>(&hook_send));
     return 0;
 }
 
