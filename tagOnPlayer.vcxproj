@@ -82,6 +82,10 @@
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClCompile Include="source\main.cpp" />
+    <ClCompile Include="source\external\MinHook\src\buffer.c" />
+    <ClCompile Include="source\external\MinHook\src\hook.c" />
+    <ClCompile Include="source\external\MinHook\src\trampoline.c" />
+    <ClCompile Include="source\external\MinHook\src\hde\hde32.c" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets" />

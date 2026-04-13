@@ -8,6 +8,8 @@
 #include <cstring>
 #include <limits>
 
+#include "external/MinHook/include/MinHook.h"
+
 static_assert(sizeof(void*) == 4, "tagOnPlayer.asi must be built for Win32.");
 
 using D3DCOLOR = std::uint32_t;
@@ -19,6 +21,11 @@ constexpr std::uintptr_t kTheCameraAddress = 0x00B6F028;
 constexpr std::size_t kHookPatchSize = 9;
 constexpr unsigned int kHeadBoneId = 8;
 constexpr D3DCOLOR kFallbackLabelColor = 0xFFFFFFFFu;
+
+constexpr char kConfigSection[] = "Settings";
+constexpr char kConfigKeyCommand[] = "Command";
+constexpr char kConfigKeyEnabled[] = "EnabledByDefault";
+constexpr char kDefaultCommand[] = "/tagon";
 
 struct CVector {
     float x;
@@ -57,9 +64,13 @@ struct GameCamera {
 
 enum class SampVersion {
     R1,
+    R2,
+    R3,
     R3_1,
-    R5_2,
-    DL_R1_2,
+    R4,
+    R4_2,
+    R5_1,
+    DL_R1,
 };
 
 struct SampVersionInfo {
@@ -70,6 +81,7 @@ struct SampVersionInfo {
     std::uint32_t refPlayerTagsOffset;
     std::uint32_t labelLoopOffset;
     std::uint32_t healthLoopOffset;
+    std::uint32_t sendCommandOffset;
     std::uint32_t beginLabelOffset;
     std::uint32_t endLabelOffset;
     std::uint32_t drawLabelOffset;
@@ -88,133 +100,56 @@ struct SampVersionInfo {
     std::uint32_t localPedOffset;
 };
 
-constexpr std::array<SampVersionInfo, 4> kSupportedVersions{{
-    {
-        0x31DF13,
-        SampVersion::R1,
-        "R1",
-        0x0021A0F8,
-        0x0021A0B0,
-        0x00070D40,
-        0x0006FC30,
-        0x000686A0,
-        0x000686B0,
-        0x000686C0,
-        0x00068FD0,
-        0x00068670,
-        0x000689C0,
-        0x00001160,
-        0x00001A30,
-        0x00013CE0,
-        0x00003D90,
-        0x000A65A0,
-        0x000A6610,
-        0x000A6650,
-        0x000A8D70,
-        0x00000004,
-        0x00000000,
-    },
-    {
-        0x0CC4D0,
-        SampVersion::R3_1,
-        "R3-1",
-        0x0026E8DC,
-        0x0026E890,
-        0x00074C30,
-        0x00073B20,
-        0x0006C610,
-        0x0006C620,
-        0x0006C630,
-        0x0006CF40,
-        0x0006C5E0,
-        0x0006C930,
-        0x00001160,
-        0x00001A30,
-        0x00016F00,
-        0x00003DA0,
-        0x000AB450,
-        0x000AB4C0,
-        0x000AB500,
-        0x000ADBF0,
-        0x00002F1C,
-        0x00000000,
-    },
-    {
-        0x0CBC90,
-        SampVersion::R5_2,
-        "R5-2",
-        0x0026EB94,
-        0x0026EB48,
-        0x00075330,
-        0x00074210,
-        0x0006CD80,
-        0x0006CD90,
-        0x0006CDA0,
-        0x0006D6B0,
-        0x0006CD50,
-        0x0006D0A0,
-        0x00001170,
-        0x00001A40,
-        0x000175C0,
-        0x00003F20,
-        0x000ABCE0,
-        0x000ABD50,
-        0x000ABD90,
-        0x000AE480,
-        0x00000004,
-        0x00000104,
-    },
-    {
-        0x0FDB60,
-        SampVersion::DL_R1_2,
-        "DL-R1-2",
-        0x002ACA24,
-        0x002AC9D8,
-        0x00074DC0,
-        0x00073CB0,
-        0x0006C7C0,
-        0x0006C7D0,
-        0x0006C7E0,
-        0x0006D0F0,
-        0x0006C790,
-        0x0006CAE0,
-        0x00001170,
-        0x00001A80,
-        0x000170D0,
-        0x00003E20,
-        0x000AB900,
-        0x000AB970,
-        0x000AB9B0,
-        0x000AE080,
-        0x00000000,
-        0x00000000,
-    },
+constexpr std::array<SampVersionInfo, 8> kSupportedVersions{{
+    {0x31DF13, SampVersion::R1,    "R1",    0x0021A0F8, 0x0021A0B0, 0x00070D40, 0x0006FC30, 0x00065C60, 0x000686A0, 0x000686B0, 0x000686C0, 0x00068FD0, 0x00068670, 0x000689C0, 0x00001160, 0x00001A30, 0x00013CE0, 0x00003D90, 0x000A65A0, 0x000A6610, 0x000A6650, 0x000A8D70, 0x00000004, 0x00000000},
+    {0x3195DD, SampVersion::R2,    "R2",    0x0021A100, 0x0021A0B8, 0x00070DE0, 0x0006FCD0, 0x00065D30, 0x00068770, 0x00068780, 0x00068790, 0x000690A0, 0x00068740, 0x00068A90, 0x00001170, 0x00001A40, 0x00013DA0, 0x00003DA0, 0x000A6770, 0x000A67E0, 0x000A6820, 0x000A8F40, 0x00000000, 0x00000000},
+    {0x0CC490, SampVersion::R3,    "R3",    0x0026E8DC, 0x0026E890, 0x00074C30, 0x00073B20, 0x00069190, 0x0006C610, 0x0006C620, 0x0006C630, 0x0006CF40, 0x0006C5E0, 0x0006C930, 0x00001160, 0x00001A30, 0x00016F00, 0x00003DA0, 0x000AB430, 0x000AB480, 0x000AB4C0, 0x000ADC00, 0x00002F1C, 0x00000000},
+    {0x0CC4D0, SampVersion::R3_1,  "R3-1",  0x0026E8DC, 0x0026E890, 0x00074C30, 0x00073B20, 0x00069190, 0x0006C610, 0x0006C620, 0x0006C630, 0x0006CF40, 0x0006C5E0, 0x0006C930, 0x00001160, 0x00001A30, 0x00016F00, 0x00003DA0, 0x000AB450, 0x000AB4C0, 0x000AB500, 0x000ADBF0, 0x00002F1C, 0x00000000},
+    {0x0CBCB0, SampVersion::R4,    "R4",    0x0026EA0C, 0x0026E9C0, 0x00075360, 0x00074240, 0x000698C0, 0x0006CD40, 0x0006CD50, 0x0006CD60, 0x0006D670, 0x0006CD10, 0x0006D060, 0x00001170, 0x00001A40, 0x00017570, 0x00003F10, 0x000ABCF0, 0x000ABD60, 0x000ABDA0, 0x000AE490, 0x0000000C, 0x00000104},
+    {0x0CBCD0, SampVersion::R4_2,  "R4-2",  0x0026EA0C, 0x0026E9C0, 0x00075390, 0x00074270, 0x00069900, 0x0006CD80, 0x0006CD90, 0x0006CDA0, 0x0006D6B0, 0x0006CD50, 0x0006D0A0, 0x00001170, 0x00001A40, 0x000175C0, 0x00003F20, 0x000ABD20, 0x000ABD90, 0x000ABDD0, 0x000AE4C0, 0x00000004, 0x00000104},
+    {0x0CBC90, SampVersion::R5_1,  "R5-1",  0x0026EB94, 0x0026EB48, 0x00075330, 0x00074210, 0x00069900, 0x0006CD80, 0x0006CD90, 0x0006CDA0, 0x0006D6B0, 0x0006CD50, 0x0006D0A0, 0x00001170, 0x00001A40, 0x000175C0, 0x00003F20, 0x000ABCE0, 0x000ABD50, 0x000ABD90, 0x000AE480, 0x00000004, 0x00000104},
+    {0x0FDB60, SampVersion::DL_R1, "DL-R1", 0x002ACA24, 0x002AC9D8, 0x00074DC0, 0x00073CB0, 0x00069340, 0x0006C7C0, 0x0006C7D0, 0x0006C7E0, 0x0006D0F0, 0x0006C790, 0x0006CAE0, 0x00001170, 0x00001A80, 0x000170D0, 0x00003E20, 0x000AB900, 0x000AB970, 0x000AB9B0, 0x000AE080, 0x00000000, 0x00000000},
 }};
 
 using RenderLoopFn = void(__cdecl*)();
+using SendCommandFn = void(__thiscall*)(void*, const char*);
 
 struct PluginState {
+    HMODULE pluginModule = nullptr;
     HMODULE sampModule = nullptr;
     std::uintptr_t sampBase = 0;
     const SampVersionInfo* version = nullptr;
     RenderLoopFn originalLabelLoop = nullptr;
     RenderLoopFn originalHealthLoop = nullptr;
-};
-
-struct LocalDrawContext {
-    void* playerTags = nullptr;
-    void* localPlayer = nullptr;
-    void* ped = nullptr;
-    CVector headPosition{};
-    const char* name = nullptr;
-    std::uint16_t id = 0;
-    D3DCOLOR color = kFallbackLabelColor;
-    float health = 0.0f;
-    float armour = 0.0f;
-    float distanceToCamera = 0.0f;
+    bool renderEnabled = true;
+    char toggleCommand[64] = "/tagon";
 };
 
 PluginState g_state;
+SendCommandFn g_originalSendCommand = nullptr;
+
+bool StrEqualNoCase(const char* a, const char* b) {
+    while (*a && *b) {
+        char ca = *a;
+        char cb = *b;
+        if (ca >= 'A' && ca <= 'Z') ca += 32;
+        if (cb >= 'A' && cb <= 'Z') cb += 32;
+        if (ca != cb) return false;
+        ++a;
+        ++b;
+    }
+    return *a == *b;
+}
+
+void __fastcall SendCommandDetour(void* thisPtr, void* /*edx*/, const char* text) {
+    if (text && StrEqualNoCase(text, g_state.toggleCommand)) {
+        g_state.renderEnabled = !g_state.renderEnabled;
+        return;
+    }
+    if (g_originalSendCommand) {
+        g_originalSendCommand(thisPtr, text);
+    }
+}
 
 template <typename T>
 bool WriteBytes(void* address, const T* data, std::size_t size) {
@@ -359,6 +294,19 @@ std::uint16_t GetLocalPlayerId(void* playerPool) {
         reinterpret_cast<const std::uint8_t*>(playerPool) + g_state.version->localPlayerIdOffset);
 }
 
+struct LocalDrawContext {
+    void* playerTags = nullptr;
+    void* localPlayer = nullptr;
+    void* ped = nullptr;
+    CVector headPosition{};
+    const char* name = nullptr;
+    std::uint16_t id = 0;
+    D3DCOLOR color = kFallbackLabelColor;
+    float health = 0.0f;
+    float armour = 0.0f;
+    float distanceToCamera = 0.0f;
+};
+
 bool BuildLocalDrawContext(LocalDrawContext& context) {
     if (g_state.version == nullptr) {
         return false;
@@ -475,7 +423,9 @@ void __cdecl HookLabelLoop() {
         g_state.originalLabelLoop();
     }
 
-    DrawLocalLabel();
+    if (g_state.renderEnabled) {
+        DrawLocalLabel();
+    }
 }
 
 void __cdecl HookHealthLoop() {
@@ -483,7 +433,9 @@ void __cdecl HookHealthLoop() {
         g_state.originalHealthLoop();
     }
 
-    DrawLocalHealthBar();
+    if (g_state.renderEnabled) {
+        DrawLocalHealthBar();
+    }
 }
 
 bool InstallHooks() {
@@ -505,7 +457,77 @@ bool InstallHooks() {
         return false;
     }
 
+    void* sendCommandTarget = reinterpret_cast<void*>(g_state.sampBase + g_state.version->sendCommandOffset);
+    if (MH_CreateHook(sendCommandTarget, reinterpret_cast<void*>(&SendCommandDetour),
+                       reinterpret_cast<void**>(&g_originalSendCommand)) != MH_OK) {
+        return false;
+    }
+    if (MH_EnableHook(sendCommandTarget) != MH_OK) {
+        return false;
+    }
+
     return true;
+}
+
+void BuildDirFromPath(char* dirOut, const char* filePath) {
+    std::memcpy(dirOut, filePath, MAX_PATH);
+    char* lastSlash = nullptr;
+    for (char* p = dirOut; *p; ++p) {
+        if (*p == '\\' || *p == '/') lastSlash = p;
+    }
+    if (lastSlash) {
+        *(lastSlash + 1) = '\0';
+    } else {
+        dirOut[0] = '\0';
+    }
+}
+
+void LoadConfig() {
+    char modulePath[MAX_PATH] = {};
+    bool found = false;
+
+    if (GetModuleFileNameA(g_state.pluginModule, modulePath, MAX_PATH) != 0) {
+        found = true;
+    }
+
+    if (!found) {
+        HMODULE resolvedModule = nullptr;
+        if (GetModuleHandleExA(
+                GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                reinterpret_cast<LPCSTR>(&LoadConfig),
+                &resolvedModule)
+            && resolvedModule != nullptr
+            && GetModuleFileNameA(resolvedModule, modulePath, MAX_PATH) != 0) {
+            found = true;
+        }
+    }
+
+    if (!found) {
+        if (GetModuleFileNameA(nullptr, modulePath, MAX_PATH) == 0) {
+            return;
+        }
+    }
+
+    char dirPath[MAX_PATH] = {};
+    BuildDirFromPath(dirPath, modulePath);
+
+    char iniPath[MAX_PATH] = {};
+    _snprintf_s(iniPath, _TRUNCATE, "%stagOnPlayer.ini", dirPath);
+
+    char commandBuf[64] = {};
+    GetPrivateProfileStringA(kConfigSection, kConfigKeyCommand, "", commandBuf, sizeof(commandBuf), iniPath);
+    if (commandBuf[0] == '\0') {
+        std::memcpy(commandBuf, kDefaultCommand, sizeof(kDefaultCommand));
+    }
+    std::memcpy(g_state.toggleCommand, commandBuf, sizeof(g_state.toggleCommand));
+
+    int enabled = GetPrivateProfileIntA(kConfigSection, kConfigKeyEnabled, 1, iniPath);
+    g_state.renderEnabled = (enabled != 0);
+
+    WritePrivateProfileStringA(kConfigSection, kConfigKeyCommand, g_state.toggleCommand, iniPath);
+    char enabledStr[4] = {};
+    _snprintf_s(enabledStr, _TRUNCATE, "%d", g_state.renderEnabled ? 1 : 0);
+    WritePrivateProfileStringA(kConfigSection, kConfigKeyEnabled, enabledStr, iniPath);
 }
 
 DWORD WINAPI InitializePlugin(void*) {
@@ -513,6 +535,9 @@ DWORD WINAPI InitializePlugin(void*) {
     while (*gtaLoadState < 9) {
         Sleep(10);
     }
+
+    LoadConfig();
+    MH_Initialize();
 
     for (;;) {
         HMODULE sampModule = GetModuleHandleA("samp.dll");
@@ -537,6 +562,7 @@ DWORD WINAPI InitializePlugin(void*) {
 
 BOOL APIENTRY DllMain(HMODULE module, DWORD reason, LPVOID) {
     if (reason == DLL_PROCESS_ATTACH) {
+        g_state.pluginModule = module;
         DisableThreadLibraryCalls(module);
 
         HANDLE thread = CreateThread(nullptr, 0, &InitializePlugin, nullptr, 0, nullptr);
