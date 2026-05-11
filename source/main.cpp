@@ -25,7 +25,12 @@ constexpr D3DCOLOR kFallbackLabelColor = 0xFFFFFFFFu;
 constexpr char kConfigSection[] = "Settings";
 constexpr char kConfigKeyCommand[] = "Command";
 constexpr char kConfigKeyEnabled[] = "EnabledByDefault";
+constexpr char kConfigKeyMirrorOwnChatBubble[] = "MirrorOwnChatBubble";
+constexpr char kConfigKeyChatBubbleLifeMs[] = "ChatBubbleLifeMs";
 constexpr char kDefaultCommand[] = "/tagon";
+constexpr int kDefaultChatBubbleLifeMs = 6000;
+constexpr std::size_t kChatBubbleLocalSkipJePatchBytes = 6;
+constexpr std::size_t kChatBubblePoolNullTrampPatchBytes = 8;
 
 struct CVector {
     float x;
@@ -98,21 +103,35 @@ struct SampVersionInfo {
     std::uint32_t pedGetBonePositionOffset;
     std::uint32_t localPlayerIdOffset;
     std::uint32_t localPedOffset;
+    std::uint32_t localPlayerChatOffset;
+    std::uint32_t refChatBubbleOffset;
+    std::uint32_t chatBubbleAddOffset;
+    std::uint32_t chatBubbleDrawOffset;
+    std::uint32_t chatBubbleLocalSkipJeRva;
+    /** R1: после mov ecx,[row+0xfde]; test ecx; near-je на конец итерации — для локального слота ecx==0. */
+    std::uint32_t chatBubblePoolNullTrampPatchRva;
+    std::uint32_t chatBubblePoolNullTrampResumeRva;
+    /** R1: `mov ecx,edi` / `call` — вход, когда цепочка `[row+0x2e]` для локального слота даёт NULL. */
+    std::uint32_t chatBubblePoolNullTrampResumeMidRva;
+    std::uint32_t chatBubblePoolNullTrampSkipRva;
 };
 
 constexpr std::array<SampVersionInfo, 8> kSupportedVersions{{
-    {0x31DF13, SampVersion::R1,    "R1",    0x0021A0F8, 0x0021A0B0, 0x00070D40, 0x0006FC30, 0x00065C60, 0x000686A0, 0x000686B0, 0x000686C0, 0x00068FD0, 0x00068670, 0x000689C0, 0x00001160, 0x00001A30, 0x00013CE0, 0x00003D90, 0x000A65A0, 0x000A6610, 0x000A6650, 0x000A8D70, 0x00000004, 0x00000000},
-    {0x3195DD, SampVersion::R2,    "R2",    0x0021A100, 0x0021A0B8, 0x00070DE0, 0x0006FCD0, 0x00065D30, 0x00068770, 0x00068780, 0x00068790, 0x000690A0, 0x00068740, 0x00068A90, 0x00001170, 0x00001A40, 0x00013DA0, 0x00003DA0, 0x000A6770, 0x000A67E0, 0x000A6820, 0x000A8F40, 0x00000000, 0x00000000},
-    {0x0CC490, SampVersion::R3,    "R3",    0x0026E8DC, 0x0026E890, 0x00074C30, 0x00073B20, 0x00069190, 0x0006C610, 0x0006C620, 0x0006C630, 0x0006CF40, 0x0006C5E0, 0x0006C930, 0x00001160, 0x00001A30, 0x00016F00, 0x00003DA0, 0x000AB430, 0x000AB480, 0x000AB4C0, 0x000ADC00, 0x00002F1C, 0x00000000},
-    {0x0CC4D0, SampVersion::R3_1,  "R3-1",  0x0026E8DC, 0x0026E890, 0x00074C30, 0x00073B20, 0x00069190, 0x0006C610, 0x0006C620, 0x0006C630, 0x0006CF40, 0x0006C5E0, 0x0006C930, 0x00001160, 0x00001A30, 0x00016F00, 0x00003DA0, 0x000AB450, 0x000AB4C0, 0x000AB500, 0x000ADBF0, 0x00002F1C, 0x00000000},
-    {0x0CBCB0, SampVersion::R4,    "R4",    0x0026EA0C, 0x0026E9C0, 0x00075360, 0x00074240, 0x000698C0, 0x0006CD40, 0x0006CD50, 0x0006CD60, 0x0006D670, 0x0006CD10, 0x0006D060, 0x00001170, 0x00001A40, 0x00017570, 0x00003F10, 0x000ABCF0, 0x000ABD60, 0x000ABDA0, 0x000AE490, 0x0000000C, 0x00000104},
-    {0x0CBCD0, SampVersion::R4_2,  "R4-2",  0x0026EA0C, 0x0026E9C0, 0x00075390, 0x00074270, 0x00069900, 0x0006CD80, 0x0006CD90, 0x0006CDA0, 0x0006D6B0, 0x0006CD50, 0x0006D0A0, 0x00001170, 0x00001A40, 0x000175C0, 0x00003F20, 0x000ABD20, 0x000ABD90, 0x000ABDD0, 0x000AE4C0, 0x00000004, 0x00000104},
-    {0x0CBC90, SampVersion::R5_1,  "R5-1",  0x0026EB94, 0x0026EB48, 0x00075330, 0x00074210, 0x00069900, 0x0006CD80, 0x0006CD90, 0x0006CDA0, 0x0006D6B0, 0x0006CD50, 0x0006D0A0, 0x00001170, 0x00001A40, 0x000175C0, 0x00003F20, 0x000ABCE0, 0x000ABD50, 0x000ABD90, 0x000AE480, 0x00000004, 0x00000104},
-    {0x0FDB60, SampVersion::DL_R1, "DL-R1", 0x002ACA24, 0x002AC9D8, 0x00074DC0, 0x00073CB0, 0x00069340, 0x0006C7C0, 0x0006C7D0, 0x0006C7E0, 0x0006D0F0, 0x0006C790, 0x0006CAE0, 0x00001170, 0x00001A80, 0x000170D0, 0x00003E20, 0x000AB900, 0x000AB970, 0x000AB9B0, 0x000AE080, 0x00000000, 0x00000000},
+    // chatBubbleDrawOffset — RVA CChatBubble::Draw (канон SAMP-API / rizin); chatBubbleLocalSkipJeRva — начало near-je
+    // «пропуск слота», если флаг видимости бабла нулевой (в т.ч. локальный игрок); патч: 6×NOP поверх 0F 84 …
+    {0x31DF13, SampVersion::R1,    "R1",    0x0021A0F8, 0x0021A0B0, 0x00070D40, 0x0006FC30, 0x00065C60, 0x000686A0, 0x000686B0, 0x000686C0, 0x00068FD0, 0x00068670, 0x000689C0, 0x00001160, 0x00001A30, 0x00013CE0, 0x00003D90, 0x000A65A0, 0x000A6610, 0x000A6650, 0x000A8D70, 0x00000004, 0x00000000, 0x000057F0, 0x0021A0DC, 0x00063250, 0x00063310, 0x000633DA, 0x000633B7, 0x000633BF, 0x000633F4, 0x00063495},
+    {0x3195DD, SampVersion::R2,    "R2",    0x0021A100, 0x0021A0B8, 0x00070DE0, 0x0006FCD0, 0x00065D30, 0x00068770, 0x00068780, 0x00068790, 0x000690A0, 0x00068740, 0x00068A90, 0x00001170, 0x00001A40, 0x00013DA0, 0x00003DA0, 0x000A6770, 0x000A67E0, 0x000A6820, 0x000A8F40, 0x00000000, 0x00000000, 0x000058C0, 0x0021A0E4, 0x00063320, 0x000633E0, 0x000634AA, 0, 0, 0, 0},
+    {0x0CC490, SampVersion::R3,    "R3",    0x0026E8DC, 0x0026E890, 0x00074C30, 0x00073B20, 0x00069190, 0x0006C610, 0x0006C620, 0x0006C630, 0x0006CF40, 0x0006C5E0, 0x0006C930, 0x00001160, 0x00001A30, 0x00016F00, 0x00003DA0, 0x000AB430, 0x000AB480, 0x000AB4C0, 0x000ADC00, 0x00002F1C, 0x00000000, 0x00005820, 0x0026E8C0, 0x000666A0, 0x00066760, 0x0006682C, 0, 0, 0, 0},
+    {0x0CC4D0, SampVersion::R3_1,  "R3-1",  0x0026E8DC, 0x0026E890, 0x00074C30, 0x00073B20, 0x00069190, 0x0006C610, 0x0006C620, 0x0006C630, 0x0006CF40, 0x0006C5E0, 0x0006C930, 0x00001160, 0x00001A30, 0x00016F00, 0x00003DA0, 0x000AB450, 0x000AB4C0, 0x000AB500, 0x000ADBF0, 0x00002F1C, 0x00000000, 0x00005820, 0x0026E8C0, 0x000666A0, 0x00066760, 0x0006682C, 0, 0, 0, 0},
+    {0x0CBCB0, SampVersion::R4,    "R4",    0x0026EA0C, 0x0026E9C0, 0x00075360, 0x00074240, 0x000698C0, 0x0006CD40, 0x0006CD50, 0x0006CD60, 0x0006D670, 0x0006CD10, 0x0006D060, 0x00001170, 0x00001A40, 0x00017570, 0x00003F10, 0x000ABCF0, 0x000ABD60, 0x000ABDA0, 0x000AE490, 0x0000000C, 0x00000104, 0x00005918, 0x0026E9F0, 0x00066DD0, 0x00066E90, 0x00066F60, 0, 0, 0, 0},
+    {0x0CBCD0, SampVersion::R4_2,  "R4-2",  0x0026EA0C, 0x0026E9C0, 0x00075390, 0x00074270, 0x00069900, 0x0006CD80, 0x0006CD90, 0x0006CDA0, 0x0006D6B0, 0x0006CD50, 0x0006D0A0, 0x00001170, 0x00001A40, 0x000175C0, 0x00003F20, 0x000ABD20, 0x000ABD90, 0x000ABDD0, 0x000AE4C0, 0x00000004, 0x00000104, 0x00005A10, 0x0026E9F0, 0x00066E10, 0x00066ED0, 0x00066FA0, 0, 0, 0, 0},
+    {0x0CBC90, SampVersion::R5_1,  "R5-1",  0x0026EB94, 0x0026EB48, 0x00075330, 0x00074210, 0x00069900, 0x0006CD80, 0x0006CD90, 0x0006CDA0, 0x0006D6B0, 0x0006CD50, 0x0006D0A0, 0x00001170, 0x00001A40, 0x000175C0, 0x00003F20, 0x000ABCE0, 0x000ABD50, 0x000ABD90, 0x000AE480, 0x00000004, 0x00000104, 0x00005A10, 0x0026EB78, 0x00066E10, 0x00066ED0, 0x00066FA0, 0, 0, 0, 0},
+    {0x0FDB60, SampVersion::DL_R1, "DL-R1", 0x002ACA24, 0x002AC9D8, 0x00074DC0, 0x00073CB0, 0x00069340, 0x0006C7C0, 0x0006C7D0, 0x0006C7E0, 0x0006D0F0, 0x0006C790, 0x0006CAE0, 0x00001170, 0x00001A80, 0x000170D0, 0x00003E20, 0x000AB900, 0x000AB970, 0x000AB9B0, 0x000AE080, 0x00000000, 0x00000000, 0x00005860, 0x002ACA08, 0x00066890, 0x00066950, 0x00066A1A, 0, 0, 0, 0},
 }};
 
 using RenderLoopFn = void(__cdecl*)();
 using SendCommandFn = void(__thiscall*)(void*, const char*);
+using LocalPlayerChatFn = void(__thiscall*)(void*, const char*);
 
 struct PluginState {
     HMODULE pluginModule = nullptr;
@@ -122,11 +141,22 @@ struct PluginState {
     RenderLoopFn originalLabelLoop = nullptr;
     RenderLoopFn originalHealthLoop = nullptr;
     bool renderEnabled = true;
+    bool mirrorOwnChatBubble = false;
+    int chatBubbleLifeMs = kDefaultChatBubbleLifeMs;
     char toggleCommand[64] = "/tagon";
 };
 
 PluginState g_state;
 SendCommandFn g_originalSendCommand = nullptr;
+LocalPlayerChatFn g_originalLocalPlayerChat = nullptr;
+
+std::uint8_t g_chatBubbleJeOrig[kChatBubbleLocalSkipJePatchBytes] = {};
+std::uint8_t g_chatBubblePoolEarlyOrig[kChatBubblePoolNullTrampPatchBytes] = {};
+
+static void* g_poolNullRowEax = nullptr;
+static void* g_chatBubblePoolResume = nullptr;
+static void* g_chatBubblePoolResumeMid = nullptr;
+static void* g_chatBubblePoolSkip = nullptr;
 
 bool StrEqualNoCase(const char* a, const char* b) {
     while (*a && *b) {
@@ -294,6 +324,58 @@ std::uint16_t GetLocalPlayerId(void* playerPool) {
         reinterpret_cast<const std::uint8_t*>(playerPool) + g_state.version->localPlayerIdOffset);
 }
 
+extern "C" void* __cdecl ResolveChatBubblePoolNull_EcxSubstitute(unsigned short slot) {
+    if (g_state.version == nullptr || g_state.sampBase == 0) {
+        return nullptr;
+    }
+
+    void* const netGame = ReadGlobalObject<void>(g_state.version->refNetGameOffset);
+    if (netGame == nullptr) {
+        return nullptr;
+    }
+
+    void* const pool = CallThis<void*>(netGame, g_state.version->getPlayerPoolOffset);
+    if (pool == nullptr) {
+        return nullptr;
+    }
+
+    const std::uint16_t localId = GetLocalPlayerId(pool);
+    if (slot != localId) {
+        return nullptr;
+    }
+
+    void* const lp = CallThis<void*>(pool, g_state.version->getLocalPlayerOffset);
+    if (lp == nullptr) {
+        return nullptr;
+    }
+
+    return lp;
+}
+
+extern "C" __declspec(naked) void ChatBubblePoolNullTrampoline_Entry() {
+    __asm {
+        test ecx, ecx
+        jnz L_resume_row
+        mov g_poolNullRowEax, eax
+        movzx eax, bp
+        push eax
+        call ResolveChatBubblePoolNull_EcxSubstitute
+        add esp, 4
+        mov ecx, eax
+        mov eax, g_poolNullRowEax
+        test ecx, ecx
+        je L_skip
+        mov edi, dword ptr[ecx]
+        test edi, edi
+        je L_skip
+        jmp dword ptr[g_chatBubblePoolResumeMid]
+L_resume_row:
+        jmp dword ptr[g_chatBubblePoolResume]
+L_skip:
+        jmp dword ptr[g_chatBubblePoolSkip]
+    }
+}
+
 struct LocalDrawContext {
     void* playerTags = nullptr;
     void* localPlayer = nullptr;
@@ -379,6 +461,133 @@ bool BuildLocalDrawContext(LocalDrawContext& context) {
     return true;
 }
 
+bool LooksLikeNearJeSkip(const void* address) {
+    const auto* bytes = static_cast<const std::uint8_t*>(address);
+    return bytes[0] == 0x0F && bytes[1] == 0x84;
+}
+
+bool LooksLikeChatBubblePoolNullTestAndJe(const void* address) {
+    const auto* bytes = static_cast<const std::uint8_t*>(address);
+    return bytes[0] == 0x85 && bytes[1] == 0xC9 && bytes[2] == 0x0F && bytes[3] == 0x84;
+}
+
+bool ApplyChatBubblePoolNullTrampoline() {
+    if (g_state.version == nullptr || g_state.sampBase == 0) {
+        return true;
+    }
+
+    const std::uint32_t patchRva = g_state.version->chatBubblePoolNullTrampPatchRva;
+    if (patchRva == 0) {
+        return true;
+    }
+
+    void* const patchAt = reinterpret_cast<void*>(g_state.sampBase + patchRva);
+    if (!LooksLikeChatBubblePoolNullTestAndJe(patchAt)) {
+        return false;
+    }
+
+    g_chatBubblePoolResume = reinterpret_cast<void*>(
+        g_state.sampBase + g_state.version->chatBubblePoolNullTrampResumeRva);
+    if (g_state.version->chatBubblePoolNullTrampResumeMidRva != 0) {
+        g_chatBubblePoolResumeMid = reinterpret_cast<void*>(
+            g_state.sampBase + g_state.version->chatBubblePoolNullTrampResumeMidRva);
+    } else {
+        g_chatBubblePoolResumeMid = nullptr;
+    }
+    g_chatBubblePoolSkip =
+        reinterpret_cast<void*>(g_state.sampBase + g_state.version->chatBubblePoolNullTrampSkipRva);
+
+    if (g_chatBubblePoolResumeMid == nullptr) {
+        return false;
+    }
+
+    std::memcpy(g_chatBubblePoolEarlyOrig, patchAt, kChatBubblePoolNullTrampPatchBytes);
+
+    std::uint8_t patchBuf[kChatBubblePoolNullTrampPatchBytes]{};
+    if (!BuildJumpPatch(
+            patchBuf,
+            sizeof(patchBuf),
+            patchAt,
+            reinterpret_cast<const void*>(&ChatBubblePoolNullTrampoline_Entry))) {
+        return false;
+    }
+
+    if (!WriteBytes(patchAt, patchBuf, sizeof(patchBuf))) {
+        return false;
+    }
+
+    return true;
+}
+
+bool ApplyChatBubbleLocalDrawBypass() {
+    if (g_state.version == nullptr || g_state.sampBase == 0) {
+        return false;
+    }
+    if (g_state.version->chatBubbleLocalSkipJeRva == 0) {
+        return false;
+    }
+
+    void* const patchAt =
+        reinterpret_cast<void*>(g_state.sampBase + g_state.version->chatBubbleLocalSkipJeRva);
+    if (!LooksLikeNearJeSkip(patchAt)) {
+        return false;
+    }
+
+    std::memcpy(g_chatBubbleJeOrig, patchAt, kChatBubbleLocalSkipJePatchBytes);
+    static constexpr std::uint8_t kNops[kChatBubbleLocalSkipJePatchBytes] = {
+        0x90, 0x90, 0x90, 0x90, 0x90, 0x90};
+    if (!WriteBytes(patchAt, kNops, sizeof(kNops))) {
+        return false;
+    }
+    return true;
+}
+
+void __fastcall LocalPlayerChatDetour(void* thisPtr, void* /*edx*/, const char* text) {
+    if (g_originalLocalPlayerChat != nullptr) {
+        g_originalLocalPlayerChat(thisPtr, text);
+    }
+
+    if (!g_state.mirrorOwnChatBubble) {
+        return;
+    }
+    if (text == nullptr || text[0] == '\0') {
+        return;
+    }
+    if (text[0] == '/') {
+        return;
+    }
+
+    LocalDrawContext context{};
+    if (!BuildLocalDrawContext(context)) {
+        return;
+    }
+
+    if (thisPtr != context.localPlayer) {
+        return;
+    }
+
+    if (context.id == 0) {
+        return;
+    }
+
+    char line[256] = {};
+    strncpy_s(line, sizeof(line), text, _TRUNCATE);
+
+    void* const bubble = ReadGlobalObject<void>(g_state.version->refChatBubbleOffset);
+    if (bubble == nullptr) {
+        return;
+    }
+
+    CallThis<void>(
+        bubble,
+        g_state.version->chatBubbleAddOffset,
+        static_cast<unsigned int>(context.id),
+        line,
+        context.color,
+        context.distanceToCamera,
+        g_state.chatBubbleLifeMs);
+}
+
 void DrawLocalLabel() {
     LocalDrawContext context{};
     if (!BuildLocalDrawContext(context)) {
@@ -443,6 +652,15 @@ bool InstallHooks() {
         return false;
     }
 
+    if (g_state.mirrorOwnChatBubble) {
+        if (!ApplyChatBubblePoolNullTrampoline()) {
+            return false;
+        }
+        if (!ApplyChatBubbleLocalDrawBypass()) {
+            return false;
+        }
+    }
+
     if (!InstallDetour(
             reinterpret_cast<void*>(g_state.sampBase + g_state.version->labelLoopOffset),
             reinterpret_cast<const void*>(&HookLabelLoop),
@@ -464,6 +682,21 @@ bool InstallHooks() {
     }
     if (MH_EnableHook(sendCommandTarget) != MH_OK) {
         return false;
+    }
+
+    if (g_state.mirrorOwnChatBubble && g_state.version->localPlayerChatOffset != 0) {
+        void* chatTarget =
+            reinterpret_cast<void*>(g_state.sampBase + g_state.version->localPlayerChatOffset);
+        if (MH_CreateHook(
+                chatTarget,
+                reinterpret_cast<void*>(&LocalPlayerChatDetour),
+                reinterpret_cast<void**>(&g_originalLocalPlayerChat))
+            != MH_OK) {
+            return false;
+        }
+        if (MH_EnableHook(chatTarget) != MH_OK) {
+            return false;
+        }
     }
 
     return true;
@@ -524,10 +757,29 @@ void LoadConfig() {
     int enabled = GetPrivateProfileIntA(kConfigSection, kConfigKeyEnabled, 1, iniPath);
     g_state.renderEnabled = (enabled != 0);
 
+    int mirror = GetPrivateProfileIntA(kConfigSection, kConfigKeyMirrorOwnChatBubble, 0, iniPath);
+    g_state.mirrorOwnChatBubble = (mirror != 0);
+
+    int life = GetPrivateProfileIntA(
+        kConfigSection, kConfigKeyChatBubbleLifeMs, kDefaultChatBubbleLifeMs, iniPath);
+    if (life < 500) {
+        life = 500;
+    }
+    if (life > 600000) {
+        life = 600000;
+    }
+    g_state.chatBubbleLifeMs = life;
+
     WritePrivateProfileStringA(kConfigSection, kConfigKeyCommand, g_state.toggleCommand, iniPath);
     char enabledStr[4] = {};
     _snprintf_s(enabledStr, _TRUNCATE, "%d", g_state.renderEnabled ? 1 : 0);
     WritePrivateProfileStringA(kConfigSection, kConfigKeyEnabled, enabledStr, iniPath);
+    char mirrorStr[4] = {};
+    _snprintf_s(mirrorStr, _TRUNCATE, "%d", g_state.mirrorOwnChatBubble ? 1 : 0);
+    WritePrivateProfileStringA(kConfigSection, kConfigKeyMirrorOwnChatBubble, mirrorStr, iniPath);
+    char lifeStr[16] = {};
+    _snprintf_s(lifeStr, _TRUNCATE, "%d", g_state.chatBubbleLifeMs);
+    WritePrivateProfileStringA(kConfigSection, kConfigKeyChatBubbleLifeMs, lifeStr, iniPath);
 }
 
 DWORD WINAPI InitializePlugin(void*) {
@@ -550,7 +802,9 @@ DWORD WINAPI InitializePlugin(void*) {
                 return 0;
             }
 
-            InstallHooks();
+            if (!InstallHooks()) {
+                return 0;
+            }
             return 0;
         }
 
