@@ -28,8 +28,11 @@ constexpr char kConfigKeyCommand[] = "Command";
 constexpr char kConfigKeyEnabled[] = "EnabledByDefault";
 constexpr char kConfigKeyMirrorOwnChatBubble[] = "MirrorOwnChatBubble";
 constexpr char kConfigKeyChatBubbleLifeMs[] = "ChatBubbleLifeMs";
+/** Дефолт ширины строки бабла (px), если INI без ключа; по rizin во всех строках `kSupportedVersions` — **257** (`push 0x101` перед внутренним `DrawText`). */
+constexpr char kConfigKeyOverlayBubbleLinePx[] = "OverlayBubbleLinePx";
 constexpr char kDefaultCommand[] = "/tagon";
 constexpr int kDefaultChatBubbleLifeMs = 6000;
+constexpr int kDefaultOverlayBubbleLinePx = 257;
 constexpr char kOverlaySection[] = "OverlayCommands";
 constexpr unsigned int kOverlayMaxRules = 16;
 constexpr std::size_t kOverlayCmdMax = 64;
@@ -132,19 +135,21 @@ struct SampVersionInfo {
     std::uint32_t chatBubblePoolNullTrampSkipRva;
     /** `kChatBubblePoolTramp*`; размер патча 8 при 1–2, 12 при 3. */
     std::uint8_t chatBubblePoolNullTrampKind;
+    /** Ширина строки текста бабла в клиенте (px), для дефолта `OverlayBubbleLinePx` после детекта версии. */
+    std::uint16_t sampBubbleDrawTextLinePx;
 };
 
 constexpr std::array<SampVersionInfo, 8> kSupportedVersions{{
     // chatBubbleDrawOffset — RVA CChatBubble::Draw (канон SAMP-API / rizin); chatBubbleLocalSkipJeRva — начало near-je
     // «пропуск слота», если флаг видимости бабла нулевой (в т.ч. локальный игрок); патч: 6×NOP поверх 0F 84 …
-    {0x31DF13, SampVersion::R1,    "R1",    0x0021A0F8, 0x0021A0B0, 0x00070D40, 0x0006FC30, 0x00065C60, 0x000686A0, 0x000686B0, 0x000686C0, 0x00068FD0, 0x00068670, 0x000689C0, 0x00001160, 0x00001A30, 0x00013CE0, 0x00003D90, 0x000A65A0, 0x000A6610, 0x000A6650, 0x000A8D70, 0x00000004, 0x00000000, 0x000057F0, 0x0021A0DC, 0x00063250, 0x00063310, 0x000633DA, 0x000633B7, 0x000633BF, 0x000633F4, 0x00063495, kChatBubblePoolTrampEcxJe8},
-    {0x3195DD, SampVersion::R2,    "R2",    0x0021A100, 0x0021A0B8, 0x00070DE0, 0x0006FCD0, 0x00065D30, 0x00068770, 0x00068780, 0x00068790, 0x000690A0, 0x00068740, 0x00068A90, 0x00001170, 0x00001A40, 0x00013DA0, 0x00003DA0, 0x000A6770, 0x000A67E0, 0x000A6820, 0x000A8F40, 0x00000000, 0x00000000, 0x000058C0, 0x0021A0E4, 0x00063320, 0x000633E0, 0x000634AA, 0x00063481, 0x0006348C, 0x000634B0, 0x00063564, kChatBubblePoolTrampEcxLeaJe12},
-    {0x0CC490, SampVersion::R3,    "R3",    0x0026E8DC, 0x0026E890, 0x00074C30, 0x00073B20, 0x00069190, 0x0006C610, 0x0006C620, 0x0006C630, 0x0006CF40, 0x0006C5E0, 0x0006C930, 0x00001160, 0x00001A30, 0x00016F00, 0x00003DA0, 0x000AB430, 0x000AB480, 0x000AB4C0, 0x000ADC00, 0x00002F1C, 0x00000000, 0x00005820, 0x0026E8C0, 0x000666A0, 0x00066760, 0x0006682C, 0x00066805, 0x0006680D, 0x00066846, 0x000668E7, kChatBubblePoolTrampEdxJe8},
-    {0x0CC4D0, SampVersion::R3_1,  "R3-1",  0x0026E8DC, 0x0026E890, 0x00074C30, 0x00073B20, 0x00069190, 0x0006C610, 0x0006C620, 0x0006C630, 0x0006CF40, 0x0006C5E0, 0x0006C930, 0x00001160, 0x00001A30, 0x00016F00, 0x00003DA0, 0x000AB450, 0x000AB4C0, 0x000AB500, 0x000ADBF0, 0x00002F1C, 0x00000000, 0x00005820, 0x0026E8C0, 0x000666A0, 0x00066760, 0x0006682C, 0x00066805, 0x0006680D, 0x00066846, 0x000668E7, kChatBubblePoolTrampEdxJe8},
-    {0x0CBCB0, SampVersion::R4,    "R4",    0x0026EA0C, 0x0026E9C0, 0x00075360, 0x00074240, 0x000698C0, 0x0006CD40, 0x0006CD50, 0x0006CD60, 0x0006D670, 0x0006CD10, 0x0006D060, 0x00001170, 0x00001A40, 0x00017570, 0x00003F10, 0x000ABCF0, 0x000ABD60, 0x000ABDA0, 0x000AE490, 0x0000000C, 0x00000104, 0x00005918, 0x0026E9F0, 0x00066DD0, 0x00066E90, 0x00066F60, 0x00066F31, 0x00066F3C, 0x00066F66, 0x0006701D, kChatBubblePoolTrampEcxLeaJe12},
-    {0x0CBCD0, SampVersion::R4_2,  "R4-2",  0x0026EA0C, 0x0026E9C0, 0x00075390, 0x00074270, 0x00069900, 0x0006CD80, 0x0006CD90, 0x0006CDA0, 0x0006D6B0, 0x0006CD50, 0x0006D0A0, 0x00001170, 0x00001A40, 0x000175C0, 0x00003F20, 0x000ABD20, 0x000ABD90, 0x000ABDD0, 0x000AE4C0, 0x00000004, 0x00000104, 0x00005A10, 0x0026E9F0, 0x00066E10, 0x00066ED0, 0x00066FA0, 0x00066F6E, 0x00066F79, 0x00066FA6, 0x0006705D, kChatBubblePoolTrampEcxLeaJe12},
-    {0x0CBC90, SampVersion::R5_1,  "R5-1",  0x0026EB94, 0x0026EB48, 0x00075330, 0x00074210, 0x00069900, 0x0006CD80, 0x0006CD90, 0x0006CDA0, 0x0006D6B0, 0x0006CD50, 0x0006D0A0, 0x00001170, 0x00001A40, 0x000175C0, 0x00003F20, 0x000ABCE0, 0x000ABD50, 0x000ABD90, 0x000AE480, 0x00000004, 0x00000104, 0x00005A10, 0x0026EB78, 0x00066E10, 0x00066ED0, 0x00066FA0, 0x00066F6E, 0x00066F79, 0x00066FA6, 0x0006705D, kChatBubblePoolTrampEcxLeaJe12},
-    {0x0FDB60, SampVersion::DL_R1, "DL-R1", 0x002ACA24, 0x002AC9D8, 0x00074DC0, 0x00073CB0, 0x00069340, 0x0006C7C0, 0x0006C7D0, 0x0006C7E0, 0x0006D0F0, 0x0006C790, 0x0006CAE0, 0x00001170, 0x00001A80, 0x000170D0, 0x00003E20, 0x000AB900, 0x000AB970, 0x000AB9B0, 0x000AE080, 0x00000000, 0x00000000, 0x00005860, 0x002ACA08, 0x00066890, 0x00066950, 0x00066A1A, 0x000669F1, 0x000669FC, 0x00066A20, 0x00066AD4, kChatBubblePoolTrampEcxLeaJe12},
+    {0x31DF13, SampVersion::R1,    "R1",    0x0021A0F8, 0x0021A0B0, 0x00070D40, 0x0006FC30, 0x00065C60, 0x000686A0, 0x000686B0, 0x000686C0, 0x00068FD0, 0x00068670, 0x000689C0, 0x00001160, 0x00001A30, 0x00013CE0, 0x00003D90, 0x000A65A0, 0x000A6610, 0x000A6650, 0x000A8D70, 0x00000004, 0x00000000, 0x000057F0, 0x0021A0DC, 0x00063250, 0x00063310, 0x000633DA, 0x000633B7, 0x000633BF, 0x000633F4, 0x00063495, kChatBubblePoolTrampEcxJe8, 257},
+    {0x3195DD, SampVersion::R2,    "R2",    0x0021A100, 0x0021A0B8, 0x00070DE0, 0x0006FCD0, 0x00065D30, 0x00068770, 0x00068780, 0x00068790, 0x000690A0, 0x00068740, 0x00068A90, 0x00001170, 0x00001A40, 0x00013DA0, 0x00003DA0, 0x000A6770, 0x000A67E0, 0x000A6820, 0x000A8F40, 0x00000000, 0x00000000, 0x000058C0, 0x0021A0E4, 0x00063320, 0x000633E0, 0x000634AA, 0x00063481, 0x0006348C, 0x000634B0, 0x00063564, kChatBubblePoolTrampEcxLeaJe12, 257},
+    {0x0CC490, SampVersion::R3,    "R3",    0x0026E8DC, 0x0026E890, 0x00074C30, 0x00073B20, 0x00069190, 0x0006C610, 0x0006C620, 0x0006C630, 0x0006CF40, 0x0006C5E0, 0x0006C930, 0x00001160, 0x00001A30, 0x00016F00, 0x00003DA0, 0x000AB430, 0x000AB480, 0x000AB4C0, 0x000ADC00, 0x00002F1C, 0x00000000, 0x00005820, 0x0026E8C0, 0x000666A0, 0x00066760, 0x0006682C, 0x00066805, 0x0006680D, 0x00066846, 0x000668E7, kChatBubblePoolTrampEdxJe8, 257},
+    {0x0CC4D0, SampVersion::R3_1,  "R3-1",  0x0026E8DC, 0x0026E890, 0x00074C30, 0x00073B20, 0x00069190, 0x0006C610, 0x0006C620, 0x0006C630, 0x0006CF40, 0x0006C5E0, 0x0006C930, 0x00001160, 0x00001A30, 0x00016F00, 0x00003DA0, 0x000AB450, 0x000AB4C0, 0x000AB500, 0x000ADBF0, 0x00002F1C, 0x00000000, 0x00005820, 0x0026E8C0, 0x000666A0, 0x00066760, 0x0006682C, 0x00066805, 0x0006680D, 0x00066846, 0x000668E7, kChatBubblePoolTrampEdxJe8, 257},
+    {0x0CBCB0, SampVersion::R4,    "R4",    0x0026EA0C, 0x0026E9C0, 0x00075360, 0x00074240, 0x000698C0, 0x0006CD40, 0x0006CD50, 0x0006CD60, 0x0006D670, 0x0006CD10, 0x0006D060, 0x00001170, 0x00001A40, 0x00017570, 0x00003F10, 0x000ABCF0, 0x000ABD60, 0x000ABDA0, 0x000AE490, 0x0000000C, 0x00000104, 0x00005918, 0x0026E9F0, 0x00066DD0, 0x00066E90, 0x00066F60, 0x00066F31, 0x00066F3C, 0x00066F66, 0x0006701D, kChatBubblePoolTrampEcxLeaJe12, 257},
+    {0x0CBCD0, SampVersion::R4_2,  "R4-2",  0x0026EA0C, 0x0026E9C0, 0x00075390, 0x00074270, 0x00069900, 0x0006CD80, 0x0006CD90, 0x0006CDA0, 0x0006D6B0, 0x0006CD50, 0x0006D0A0, 0x00001170, 0x00001A40, 0x000175C0, 0x00003F20, 0x000ABD20, 0x000ABD90, 0x000ABDD0, 0x000AE4C0, 0x00000004, 0x00000104, 0x00005A10, 0x0026E9F0, 0x00066E10, 0x00066ED0, 0x00066FA0, 0x00066F6E, 0x00066F79, 0x00066FA6, 0x0006705D, kChatBubblePoolTrampEcxLeaJe12, 257},
+    {0x0CBC90, SampVersion::R5_1,  "R5-1",  0x0026EB94, 0x0026EB48, 0x00075330, 0x00074210, 0x00069900, 0x0006CD80, 0x0006CD90, 0x0006CDA0, 0x0006D6B0, 0x0006CD50, 0x0006D0A0, 0x00001170, 0x00001A40, 0x000175C0, 0x00003F20, 0x000ABCE0, 0x000ABD50, 0x000ABD90, 0x000AE480, 0x00000004, 0x00000104, 0x00005A10, 0x0026EB78, 0x00066E10, 0x00066ED0, 0x00066FA0, 0x00066F6E, 0x00066F79, 0x00066FA6, 0x0006705D, kChatBubblePoolTrampEcxLeaJe12, 257},
+    {0x0FDB60, SampVersion::DL_R1, "DL-R1", 0x002ACA24, 0x002AC9D8, 0x00074DC0, 0x00073CB0, 0x00069340, 0x0006C7C0, 0x0006C7D0, 0x0006C7E0, 0x0006D0F0, 0x0006C790, 0x0006CAE0, 0x00001170, 0x00001A80, 0x000170D0, 0x00003E20, 0x000AB900, 0x000AB970, 0x000AB9B0, 0x000AE080, 0x00000000, 0x00000000, 0x00005860, 0x002ACA08, 0x00066890, 0x00066950, 0x00066A1A, 0x000669F1, 0x000669FC, 0x00066A20, 0x00066AD4, kChatBubblePoolTrampEcxLeaJe12, 257},
 }};
 
 using RenderLoopFn = void(__cdecl*)();
@@ -171,6 +176,8 @@ struct PluginState {
     bool renderEnabled = true;
     bool mirrorOwnChatBubble = false;
     int chatBubbleLifeMs = kDefaultChatBubbleLifeMs;
+    /** `0` — не вставлять `\n` перед `{RRGGBB}`; иначе макс. ширина строки (px), R1 из rizin. */
+    int overlayBubbleLinePx = kDefaultOverlayBubbleLinePx;
     char toggleCommand[64] = "/tagon";
     std::array<OverlayCommandRule, kOverlayMaxRules> overlayRules{};
     unsigned int overlayRuleCount = 0;
@@ -179,6 +186,99 @@ struct PluginState {
 PluginState g_state;
 SendCommandFn g_originalSendCommand = nullptr;
 LocalPlayerChatFn g_originalLocalPlayerChat = nullptr;
+
+static HDC g_overlayBubbleMeasureDc = nullptr;
+static HFONT g_overlayBubbleMeasureFont = nullptr;
+static HFONT g_overlayBubbleMeasureOldFont = nullptr;
+
+void OverlayBubbleMeasureShutdown() {
+    if (g_overlayBubbleMeasureDc != nullptr) {
+        if (g_overlayBubbleMeasureFont != nullptr) {
+            SelectObject(g_overlayBubbleMeasureDc, g_overlayBubbleMeasureOldFont);
+            DeleteObject(g_overlayBubbleMeasureFont);
+            g_overlayBubbleMeasureFont = nullptr;
+            g_overlayBubbleMeasureOldFont = nullptr;
+        }
+        DeleteDC(g_overlayBubbleMeasureDc);
+        g_overlayBubbleMeasureDc = nullptr;
+    }
+}
+
+bool OverlayBubbleMeasureEnsure() {
+    if (g_overlayBubbleMeasureDc != nullptr) {
+        return true;
+    }
+    HDC screen = GetDC(nullptr);
+    if (screen == nullptr) {
+        return false;
+    }
+    g_overlayBubbleMeasureDc = CreateCompatibleDC(screen);
+    ReleaseDC(nullptr, screen);
+    if (g_overlayBubbleMeasureDc == nullptr) {
+        return false;
+    }
+    /* R1 rizin: `ps @ 0x100d8028` → Arial; у `0x1006739b` — Height 10, Weight 700 для D3DXCreateFont. */
+    g_overlayBubbleMeasureFont = CreateFontA(
+        -11,
+        0,
+        0,
+        0,
+        FW_BOLD,
+        FALSE,
+        FALSE,
+        FALSE,
+        DEFAULT_CHARSET,
+        OUT_DEFAULT_PRECIS,
+        CLIP_DEFAULT_PRECIS,
+        CLEARTYPE_QUALITY,
+        DEFAULT_PITCH | FF_DONTCARE,
+        "Arial");
+    if (g_overlayBubbleMeasureFont == nullptr) {
+        DeleteDC(g_overlayBubbleMeasureDc);
+        g_overlayBubbleMeasureDc = nullptr;
+        return false;
+    }
+    g_overlayBubbleMeasureOldFont =
+        static_cast<HFONT>(SelectObject(g_overlayBubbleMeasureDc, g_overlayBubbleMeasureFont));
+    return true;
+}
+
+int OverlayBubbleMeasureCharWidthA(char c) {
+    char s[2] = {c, '\0'};
+    SIZE sz = {};
+    if (g_overlayBubbleMeasureDc == nullptr || !GetTextExtentPoint32A(g_overlayBubbleMeasureDc, s, 1, &sz)) {
+        return 7;
+    }
+    return static_cast<int>(sz.cx);
+}
+
+void OverlayBubbleAdvanceLineLayout(int maxLinePx, int& linePx, const char* s, std::size_t len) {
+    for (std::size_t i = 0; i < len; ++i) {
+        const int w = OverlayBubbleMeasureCharWidthA(s[i]);
+        if (linePx + w > maxLinePx) {
+            linePx = w;
+        } else {
+            linePx += w;
+        }
+    }
+}
+
+/** Перенос посередине 8-символьного `{RRGGBB}` при той же эвристике ширины, что в плагине. */
+bool OverlayBubbleColorEmbedSplitsMidLine(int maxLinePx, int linePx, const char embed[9]) {
+    int x = linePx;
+    for (int i = 0; i < 8; ++i) {
+        const int w = OverlayBubbleMeasureCharWidthA(embed[i]);
+        if (x + w <= maxLinePx) {
+            x += w;
+            continue;
+        }
+        if (i > 0) {
+            return true;
+        }
+        x = w;
+    }
+    return false;
+}
 
 std::uint8_t g_chatBubbleJeOrig[kChatBubbleLocalSkipJePatchBytes] = {};
 std::uint8_t g_chatBubblePoolEarlyOrig[kChatBubblePoolNullTrampPatchBytesMax] = {};
@@ -192,6 +292,7 @@ static DWORD g_chatBubbleLocalPedOffsetDw = 0;
 static void* g_chatBubblePoolResume = nullptr;
 static void* g_chatBubblePoolResumeMid = nullptr;
 static void* g_chatBubblePoolSkip = nullptr;
+static char g_tagOnPlayerIniPath[MAX_PATH] = {};
 
 bool StrEqualNoCase(const char* a, const char* b) {
     while (*a && *b) {
@@ -324,33 +425,20 @@ static char HexDigitUpper(std::uint8_t nibble) {
     return static_cast<char>(nibble < 10 ? ('0' + nibble) : ('A' + (nibble - 10)));
 }
 
-/** Добавляет в `out` строку `{RRGGBB}` из канонического **AARRGGBB** (как `ColorN`). `*used` — длина без `\0`. */
-bool AppendCanonicalColorAsChatEmbed(char* out, std::size_t cap, std::size_t& used, D3DCOLOR canonicalArgb) {
-    if (out == nullptr || cap == 0) {
-        return false;
-    }
+void FormatCanonicalColorEmbedInto(char embed[9], D3DCOLOR canonicalArgb) {
     const std::uint32_t u = static_cast<std::uint32_t>(canonicalArgb);
     const std::uint8_t r = static_cast<std::uint8_t>((u >> 16) & 0xFFu);
     const std::uint8_t g = static_cast<std::uint8_t>((u >> 8) & 0xFFu);
     const std::uint8_t b = static_cast<std::uint8_t>(u & 0xFFu);
-    char embed[9] = {
-        '{',
-        HexDigitUpper(static_cast<std::uint8_t>(r >> 4)),
-        HexDigitUpper(r),
-        HexDigitUpper(static_cast<std::uint8_t>(g >> 4)),
-        HexDigitUpper(g),
-        HexDigitUpper(static_cast<std::uint8_t>(b >> 4)),
-        HexDigitUpper(b),
-        '}',
-        '\0'};
-    const std::size_t n = std::strlen(embed);
-    if (used + n + 1 > cap) {
-        return false;
-    }
-    std::memcpy(out + used, embed, n);
-    used += n;
-    out[used] = '\0';
-    return true;
+    embed[0] = '{';
+    embed[1] = HexDigitUpper(static_cast<std::uint8_t>(r >> 4));
+    embed[2] = HexDigitUpper(r);
+    embed[3] = HexDigitUpper(static_cast<std::uint8_t>(g >> 4));
+    embed[4] = HexDigitUpper(g);
+    embed[5] = HexDigitUpper(static_cast<std::uint8_t>(b >> 4));
+    embed[6] = HexDigitUpper(b);
+    embed[7] = '}';
+    embed[8] = '\0';
 }
 
 bool AppendCStringTrunc(char* out, std::size_t cap, std::size_t& used, const char* s) {
@@ -374,6 +462,38 @@ bool AppendChar(char* out, std::size_t cap, std::size_t& used, char c) {
     out[used] = c;
     ++used;
     out[used] = '\0';
+    return true;
+}
+
+/** Вставка `{RRGGBB}`: при `maxLinePx>0` и симуляции разрыва токена — один `\n` перед ним, иначе без лишних переносов. */
+bool AppendOverlayBubbleColorEmbed(
+    char* out,
+    std::size_t cap,
+    std::size_t& used,
+    int maxLinePx,
+    int& linePx,
+    D3DCOLOR canonicalArgb) {
+    if (out == nullptr || cap == 0) {
+        return false;
+    }
+    char embed[9] = {};
+    FormatCanonicalColorEmbedInto(embed, canonicalArgb);
+    if (maxLinePx > 0 && OverlayBubbleMeasureEnsure()
+        && OverlayBubbleColorEmbedSplitsMidLine(maxLinePx, linePx, embed)) {
+        if (!AppendChar(out, cap, used, '\n')) {
+            return false;
+        }
+        linePx = 0;
+    }
+    if (used + 8 + 1 > cap) {
+        return false;
+    }
+    std::memcpy(out + used, embed, 8);
+    used += 8;
+    out[used] = '\0';
+    if (maxLinePx > 0 && OverlayBubbleMeasureEnsure()) {
+        OverlayBubbleAdvanceLineLayout(maxLinePx, linePx, embed, 8);
+    }
     return true;
 }
 
@@ -443,12 +563,17 @@ void BuildOverlayBubbleText(char* out, std::size_t cap, const OverlayCommandRule
     SplitRestIntoSegments(rest, rule.bubbleSplit, seg0, seg1, sizeof(seg0));
 
     std::size_t used = 0;
+    int linePx = 0;
+    const int maxLine = g_state.overlayBubbleLinePx;
     const D3DCOLOR c2 = rule.accentColorValid ? rule.accentColor : rule.color;
 
     for (const char* p = rule.bubbleTemplate; *p != '\0';) {
         if (p[0] == '{' && p[1] == '0' && p[2] == '}') {
             if (!AppendCStringTrunc(out, cap, used, seg0)) {
                 return;
+            }
+            if (maxLine > 0 && OverlayBubbleMeasureEnsure()) {
+                OverlayBubbleAdvanceLineLayout(maxLine, linePx, seg0, std::strlen(seg0));
             }
             p += 3;
             continue;
@@ -457,18 +582,21 @@ void BuildOverlayBubbleText(char* out, std::size_t cap, const OverlayCommandRule
             if (!AppendCStringTrunc(out, cap, used, seg1)) {
                 return;
             }
+            if (maxLine > 0 && OverlayBubbleMeasureEnsure()) {
+                OverlayBubbleAdvanceLineLayout(maxLine, linePx, seg1, std::strlen(seg1));
+            }
             p += 3;
             continue;
         }
         if (p[0] == '{' && p[1] == 'c' && p[2] == '1' && p[3] == '}') {
-            if (!AppendCanonicalColorAsChatEmbed(out, cap, used, rule.color)) {
+            if (!AppendOverlayBubbleColorEmbed(out, cap, used, maxLine, linePx, rule.color)) {
                 return;
             }
             p += 4;
             continue;
         }
         if (p[0] == '{' && p[1] == 'c' && p[2] == '2' && p[3] == '}') {
-            if (!AppendCanonicalColorAsChatEmbed(out, cap, used, c2)) {
+            if (!AppendOverlayBubbleColorEmbed(out, cap, used, maxLine, linePx, c2)) {
                 return;
             }
             p += 4;
@@ -476,6 +604,13 @@ void BuildOverlayBubbleText(char* out, std::size_t cap, const OverlayCommandRule
         }
         if (!AppendChar(out, cap, used, *p)) {
             return;
+        }
+        if (maxLine > 0 && OverlayBubbleMeasureEnsure()) {
+            if (*p == '\n') {
+                linePx = 0;
+            } else {
+                OverlayBubbleAdvanceLineLayout(maxLine, linePx, p, 1);
+            }
         }
         ++p;
     }
@@ -1266,6 +1401,9 @@ void WriteDefaultTagOnPlayerIniIfAbsent(const char* iniPath) {
         "EnabledByDefault=1\r\n"
         "MirrorOwnChatBubble=1\r\n"
         "ChatBubbleLifeMs=6000\r\n"
+        "; OverlayBubbleLinePx: max bubble text line width (px) for overlay bubble wrap heuristic (GDI vs D3DX). "
+        "Per supported samp.dll (rizin): 257 (`push 0x101` before inner DrawText); 0=off.\r\n"
+        "OverlayBubbleLinePx=257\r\n"
         "\r\n"
         "; [OverlayCommands] ColorN: only {RRGGBB}, {AARRGGBB} (dword ARGB), or signed decimal D3DCOLOR.\r\n"
         "; Optional: BubbleTemplateN, BubbleSplitN, AccentColorN\r\n"
@@ -1305,7 +1443,29 @@ void WriteDefaultTagOnPlayerIniIfAbsent(const char* iniPath) {
     CloseHandle(h);
 }
 
+void LoadOverlayBubbleLinePxFromIni(const char* iniPath, int defaultPx) {
+    int bubbleLinePx =
+        GetPrivateProfileIntA(kConfigSection, kConfigKeyOverlayBubbleLinePx, defaultPx, iniPath);
+    if (bubbleLinePx < 0) {
+        bubbleLinePx = 0;
+    }
+    if (bubbleLinePx > 2048) {
+        bubbleLinePx = 2048;
+    }
+    g_state.overlayBubbleLinePx = bubbleLinePx;
+}
+
+/** После `DetectSampVersion`: дефолт `GetPrivateProfileInt` для отсутствующего ключа — ширина из `samp.dll` для этой строки `kSupportedVersions`. */
+void RefreshOverlayBubbleLinePxAfterVersionDetect() {
+    if (g_state.version == nullptr || g_tagOnPlayerIniPath[0] == '\0') {
+        return;
+    }
+    LoadOverlayBubbleLinePxFromIni(
+        g_tagOnPlayerIniPath, static_cast<int>(g_state.version->sampBubbleDrawTextLinePx));
+}
+
 void LoadConfig() {
+    g_tagOnPlayerIniPath[0] = '\0';
     char modulePath[MAX_PATH] = {};
     bool found = false;
 
@@ -1336,6 +1496,7 @@ void LoadConfig() {
 
     char iniPath[MAX_PATH] = {};
     _snprintf_s(iniPath, _TRUNCATE, "%stagOnPlayer.ini", dirPath);
+    strcpy_s(g_tagOnPlayerIniPath, iniPath);
 
     WriteDefaultTagOnPlayerIniIfAbsent(iniPath);
 
@@ -1362,6 +1523,8 @@ void LoadConfig() {
     }
     g_state.chatBubbleLifeMs = life;
 
+    LoadOverlayBubbleLinePxFromIni(iniPath, kDefaultOverlayBubbleLinePx);
+
     LoadOverlayCommands(iniPath);
 
     WritePrivateProfileStringA(kConfigSection, kConfigKeyCommand, g_state.toggleCommand, iniPath);
@@ -1374,6 +1537,9 @@ void LoadConfig() {
     char lifeStr[16] = {};
     _snprintf_s(lifeStr, _TRUNCATE, "%d", g_state.chatBubbleLifeMs);
     WritePrivateProfileStringA(kConfigSection, kConfigKeyChatBubbleLifeMs, lifeStr, iniPath);
+    char linePxStr[16] = {};
+    _snprintf_s(linePxStr, _TRUNCATE, "%d", g_state.overlayBubbleLinePx);
+    WritePrivateProfileStringA(kConfigSection, kConfigKeyOverlayBubbleLinePx, linePxStr, iniPath);
 }
 
 DWORD WINAPI InitializePlugin(void*) {
@@ -1396,6 +1562,8 @@ DWORD WINAPI InitializePlugin(void*) {
                 return 0;
             }
 
+            RefreshOverlayBubbleLinePxAfterVersionDetect();
+
             if (!InstallHooks()) {
                 return 0;
             }
@@ -1417,6 +1585,8 @@ BOOL APIENTRY DllMain(HMODULE module, DWORD reason, LPVOID) {
         if (thread != nullptr) {
             CloseHandle(thread);
         }
+    } else if (reason == DLL_PROCESS_DETACH) {
+        OverlayBubbleMeasureShutdown();
     }
 
     return TRUE;
