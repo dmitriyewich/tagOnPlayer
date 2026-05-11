@@ -30,7 +30,16 @@ constexpr char kConfigKeyChatBubbleLifeMs[] = "ChatBubbleLifeMs";
 constexpr char kDefaultCommand[] = "/tagon";
 constexpr int kDefaultChatBubbleLifeMs = 6000;
 constexpr std::size_t kChatBubbleLocalSkipJePatchBytes = 6;
-constexpr std::size_t kChatBubblePoolNullTrampPatchBytes = 8;
+constexpr std::size_t kChatBubblePoolNullTrampPatchBytesMax = 12;
+
+/** 0 — нет патча; иначе см. `chatBubblePoolNullTrampKind`. */
+constexpr std::uint8_t kChatBubblePoolTrampNone = 0;
+/** R1: `test ecx` + near-`je` (8 байт); `resume` / `resumeMid` как сейчас. */
+constexpr std::uint8_t kChatBubblePoolTrampEcxJe8 = 1;
+/** R3 / R3-1: `test edx` + near-`je` (8); подстановка — `esi = *(void**)((uint8_t*)lp + localPedOffset)`. */
+constexpr std::uint8_t kChatBubblePoolTrampEdxJe8 = 2;
+/** R2, R4, R4-2, R5-1, DL-R1: `test ecx` + `lea eax,[edi+edx*4]` + near-`je` (12). */
+constexpr std::uint8_t kChatBubblePoolTrampEcxLeaJe12 = 3;
 
 struct CVector {
     float x;
@@ -111,22 +120,24 @@ struct SampVersionInfo {
     /** R1: после mov ecx,[row+0xfde]; test ecx; near-je на конец итерации — для локального слота ecx==0. */
     std::uint32_t chatBubblePoolNullTrampPatchRva;
     std::uint32_t chatBubblePoolNullTrampResumeRva;
-    /** R1: `mov ecx,edi` / `call` — вход, когда цепочка `[row+0x2e]` для локального слота даёт NULL. */
+    /** После подстановки локального слота: R1 — `mov ecx,edi`/кость; R3* — `mov ecx,esi`/кость; R2+ — `push ebp`/`mov ecx,edi`/GetPlayer. */
     std::uint32_t chatBubblePoolNullTrampResumeMidRva;
     std::uint32_t chatBubblePoolNullTrampSkipRva;
+    /** `kChatBubblePoolTramp*`; размер патча 8 при 1–2, 12 при 3. */
+    std::uint8_t chatBubblePoolNullTrampKind;
 };
 
 constexpr std::array<SampVersionInfo, 8> kSupportedVersions{{
     // chatBubbleDrawOffset — RVA CChatBubble::Draw (канон SAMP-API / rizin); chatBubbleLocalSkipJeRva — начало near-je
     // «пропуск слота», если флаг видимости бабла нулевой (в т.ч. локальный игрок); патч: 6×NOP поверх 0F 84 …
-    {0x31DF13, SampVersion::R1,    "R1",    0x0021A0F8, 0x0021A0B0, 0x00070D40, 0x0006FC30, 0x00065C60, 0x000686A0, 0x000686B0, 0x000686C0, 0x00068FD0, 0x00068670, 0x000689C0, 0x00001160, 0x00001A30, 0x00013CE0, 0x00003D90, 0x000A65A0, 0x000A6610, 0x000A6650, 0x000A8D70, 0x00000004, 0x00000000, 0x000057F0, 0x0021A0DC, 0x00063250, 0x00063310, 0x000633DA, 0x000633B7, 0x000633BF, 0x000633F4, 0x00063495},
-    {0x3195DD, SampVersion::R2,    "R2",    0x0021A100, 0x0021A0B8, 0x00070DE0, 0x0006FCD0, 0x00065D30, 0x00068770, 0x00068780, 0x00068790, 0x000690A0, 0x00068740, 0x00068A90, 0x00001170, 0x00001A40, 0x00013DA0, 0x00003DA0, 0x000A6770, 0x000A67E0, 0x000A6820, 0x000A8F40, 0x00000000, 0x00000000, 0x000058C0, 0x0021A0E4, 0x00063320, 0x000633E0, 0x000634AA, 0, 0, 0, 0},
-    {0x0CC490, SampVersion::R3,    "R3",    0x0026E8DC, 0x0026E890, 0x00074C30, 0x00073B20, 0x00069190, 0x0006C610, 0x0006C620, 0x0006C630, 0x0006CF40, 0x0006C5E0, 0x0006C930, 0x00001160, 0x00001A30, 0x00016F00, 0x00003DA0, 0x000AB430, 0x000AB480, 0x000AB4C0, 0x000ADC00, 0x00002F1C, 0x00000000, 0x00005820, 0x0026E8C0, 0x000666A0, 0x00066760, 0x0006682C, 0, 0, 0, 0},
-    {0x0CC4D0, SampVersion::R3_1,  "R3-1",  0x0026E8DC, 0x0026E890, 0x00074C30, 0x00073B20, 0x00069190, 0x0006C610, 0x0006C620, 0x0006C630, 0x0006CF40, 0x0006C5E0, 0x0006C930, 0x00001160, 0x00001A30, 0x00016F00, 0x00003DA0, 0x000AB450, 0x000AB4C0, 0x000AB500, 0x000ADBF0, 0x00002F1C, 0x00000000, 0x00005820, 0x0026E8C0, 0x000666A0, 0x00066760, 0x0006682C, 0, 0, 0, 0},
-    {0x0CBCB0, SampVersion::R4,    "R4",    0x0026EA0C, 0x0026E9C0, 0x00075360, 0x00074240, 0x000698C0, 0x0006CD40, 0x0006CD50, 0x0006CD60, 0x0006D670, 0x0006CD10, 0x0006D060, 0x00001170, 0x00001A40, 0x00017570, 0x00003F10, 0x000ABCF0, 0x000ABD60, 0x000ABDA0, 0x000AE490, 0x0000000C, 0x00000104, 0x00005918, 0x0026E9F0, 0x00066DD0, 0x00066E90, 0x00066F60, 0, 0, 0, 0},
-    {0x0CBCD0, SampVersion::R4_2,  "R4-2",  0x0026EA0C, 0x0026E9C0, 0x00075390, 0x00074270, 0x00069900, 0x0006CD80, 0x0006CD90, 0x0006CDA0, 0x0006D6B0, 0x0006CD50, 0x0006D0A0, 0x00001170, 0x00001A40, 0x000175C0, 0x00003F20, 0x000ABD20, 0x000ABD90, 0x000ABDD0, 0x000AE4C0, 0x00000004, 0x00000104, 0x00005A10, 0x0026E9F0, 0x00066E10, 0x00066ED0, 0x00066FA0, 0, 0, 0, 0},
-    {0x0CBC90, SampVersion::R5_1,  "R5-1",  0x0026EB94, 0x0026EB48, 0x00075330, 0x00074210, 0x00069900, 0x0006CD80, 0x0006CD90, 0x0006CDA0, 0x0006D6B0, 0x0006CD50, 0x0006D0A0, 0x00001170, 0x00001A40, 0x000175C0, 0x00003F20, 0x000ABCE0, 0x000ABD50, 0x000ABD90, 0x000AE480, 0x00000004, 0x00000104, 0x00005A10, 0x0026EB78, 0x00066E10, 0x00066ED0, 0x00066FA0, 0, 0, 0, 0},
-    {0x0FDB60, SampVersion::DL_R1, "DL-R1", 0x002ACA24, 0x002AC9D8, 0x00074DC0, 0x00073CB0, 0x00069340, 0x0006C7C0, 0x0006C7D0, 0x0006C7E0, 0x0006D0F0, 0x0006C790, 0x0006CAE0, 0x00001170, 0x00001A80, 0x000170D0, 0x00003E20, 0x000AB900, 0x000AB970, 0x000AB9B0, 0x000AE080, 0x00000000, 0x00000000, 0x00005860, 0x002ACA08, 0x00066890, 0x00066950, 0x00066A1A, 0, 0, 0, 0},
+    {0x31DF13, SampVersion::R1,    "R1",    0x0021A0F8, 0x0021A0B0, 0x00070D40, 0x0006FC30, 0x00065C60, 0x000686A0, 0x000686B0, 0x000686C0, 0x00068FD0, 0x00068670, 0x000689C0, 0x00001160, 0x00001A30, 0x00013CE0, 0x00003D90, 0x000A65A0, 0x000A6610, 0x000A6650, 0x000A8D70, 0x00000004, 0x00000000, 0x000057F0, 0x0021A0DC, 0x00063250, 0x00063310, 0x000633DA, 0x000633B7, 0x000633BF, 0x000633F4, 0x00063495, kChatBubblePoolTrampEcxJe8},
+    {0x3195DD, SampVersion::R2,    "R2",    0x0021A100, 0x0021A0B8, 0x00070DE0, 0x0006FCD0, 0x00065D30, 0x00068770, 0x00068780, 0x00068790, 0x000690A0, 0x00068740, 0x00068A90, 0x00001170, 0x00001A40, 0x00013DA0, 0x00003DA0, 0x000A6770, 0x000A67E0, 0x000A6820, 0x000A8F40, 0x00000000, 0x00000000, 0x000058C0, 0x0021A0E4, 0x00063320, 0x000633E0, 0x000634AA, 0x00063481, 0x0006348C, 0x000634B0, 0x00063564, kChatBubblePoolTrampEcxLeaJe12},
+    {0x0CC490, SampVersion::R3,    "R3",    0x0026E8DC, 0x0026E890, 0x00074C30, 0x00073B20, 0x00069190, 0x0006C610, 0x0006C620, 0x0006C630, 0x0006CF40, 0x0006C5E0, 0x0006C930, 0x00001160, 0x00001A30, 0x00016F00, 0x00003DA0, 0x000AB430, 0x000AB480, 0x000AB4C0, 0x000ADC00, 0x00002F1C, 0x00000000, 0x00005820, 0x0026E8C0, 0x000666A0, 0x00066760, 0x0006682C, 0x00066805, 0x0006680D, 0x00066846, 0x000668E7, kChatBubblePoolTrampEdxJe8},
+    {0x0CC4D0, SampVersion::R3_1,  "R3-1",  0x0026E8DC, 0x0026E890, 0x00074C30, 0x00073B20, 0x00069190, 0x0006C610, 0x0006C620, 0x0006C630, 0x0006CF40, 0x0006C5E0, 0x0006C930, 0x00001160, 0x00001A30, 0x00016F00, 0x00003DA0, 0x000AB450, 0x000AB4C0, 0x000AB500, 0x000ADBF0, 0x00002F1C, 0x00000000, 0x00005820, 0x0026E8C0, 0x000666A0, 0x00066760, 0x0006682C, 0x00066805, 0x0006680D, 0x00066846, 0x000668E7, kChatBubblePoolTrampEdxJe8},
+    {0x0CBCB0, SampVersion::R4,    "R4",    0x0026EA0C, 0x0026E9C0, 0x00075360, 0x00074240, 0x000698C0, 0x0006CD40, 0x0006CD50, 0x0006CD60, 0x0006D670, 0x0006CD10, 0x0006D060, 0x00001170, 0x00001A40, 0x00017570, 0x00003F10, 0x000ABCF0, 0x000ABD60, 0x000ABDA0, 0x000AE490, 0x0000000C, 0x00000104, 0x00005918, 0x0026E9F0, 0x00066DD0, 0x00066E90, 0x00066F60, 0x00066F31, 0x00066F3C, 0x00066F66, 0x0006701D, kChatBubblePoolTrampEcxLeaJe12},
+    {0x0CBCD0, SampVersion::R4_2,  "R4-2",  0x0026EA0C, 0x0026E9C0, 0x00075390, 0x00074270, 0x00069900, 0x0006CD80, 0x0006CD90, 0x0006CDA0, 0x0006D6B0, 0x0006CD50, 0x0006D0A0, 0x00001170, 0x00001A40, 0x000175C0, 0x00003F20, 0x000ABD20, 0x000ABD90, 0x000ABDD0, 0x000AE4C0, 0x00000004, 0x00000104, 0x00005A10, 0x0026E9F0, 0x00066E10, 0x00066ED0, 0x00066FA0, 0x00066F6E, 0x00066F79, 0x00066FA6, 0x0006705D, kChatBubblePoolTrampEcxLeaJe12},
+    {0x0CBC90, SampVersion::R5_1,  "R5-1",  0x0026EB94, 0x0026EB48, 0x00075330, 0x00074210, 0x00069900, 0x0006CD80, 0x0006CD90, 0x0006CDA0, 0x0006D6B0, 0x0006CD50, 0x0006D0A0, 0x00001170, 0x00001A40, 0x000175C0, 0x00003F20, 0x000ABCE0, 0x000ABD50, 0x000ABD90, 0x000AE480, 0x00000004, 0x00000104, 0x00005A10, 0x0026EB78, 0x00066E10, 0x00066ED0, 0x00066FA0, 0x00066F6E, 0x00066F79, 0x00066FA6, 0x0006705D, kChatBubblePoolTrampEcxLeaJe12},
+    {0x0FDB60, SampVersion::DL_R1, "DL-R1", 0x002ACA24, 0x002AC9D8, 0x00074DC0, 0x00073CB0, 0x00069340, 0x0006C7C0, 0x0006C7D0, 0x0006C7E0, 0x0006D0F0, 0x0006C790, 0x0006CAE0, 0x00001170, 0x00001A80, 0x000170D0, 0x00003E20, 0x000AB900, 0x000AB970, 0x000AB9B0, 0x000AE080, 0x00000000, 0x00000000, 0x00005860, 0x002ACA08, 0x00066890, 0x00066950, 0x00066A1A, 0x000669F1, 0x000669FC, 0x00066A20, 0x00066AD4, kChatBubblePoolTrampEcxLeaJe12},
 }};
 
 using RenderLoopFn = void(__cdecl*)();
@@ -151,9 +162,14 @@ SendCommandFn g_originalSendCommand = nullptr;
 LocalPlayerChatFn g_originalLocalPlayerChat = nullptr;
 
 std::uint8_t g_chatBubbleJeOrig[kChatBubbleLocalSkipJePatchBytes] = {};
-std::uint8_t g_chatBubblePoolEarlyOrig[kChatBubblePoolNullTrampPatchBytes] = {};
+std::uint8_t g_chatBubblePoolEarlyOrig[kChatBubblePoolNullTrampPatchBytesMax] = {};
 
 static void* g_poolNullRowEax = nullptr;
+static void* g_poolNullSaveEcx = nullptr;
+static void* g_poolNullSaveEax = nullptr;
+static void* g_poolNullLeaSaveEdx = nullptr;
+static void* g_poolNullLeaSaveEdi = nullptr;
+static DWORD g_chatBubbleLocalPedOffsetDw = 0;
 static void* g_chatBubblePoolResume = nullptr;
 static void* g_chatBubblePoolResumeMid = nullptr;
 static void* g_chatBubblePoolSkip = nullptr;
@@ -352,7 +368,7 @@ extern "C" void* __cdecl ResolveChatBubblePoolNull_EcxSubstitute(unsigned short 
     return lp;
 }
 
-extern "C" __declspec(naked) void ChatBubblePoolNullTrampoline_Entry() {
+extern "C" __declspec(naked) void ChatBubblePoolNullTrampoline_EcxJe8() {
     __asm {
         test ecx, ecx
         jnz L_resume_row
@@ -365,14 +381,70 @@ extern "C" __declspec(naked) void ChatBubblePoolNullTrampoline_Entry() {
         mov eax, g_poolNullRowEax
         test ecx, ecx
         je L_skip
-        mov edi, dword ptr[ecx]
+        mov edi, dword ptr [ecx]
         test edi, edi
         je L_skip
-        jmp dword ptr[g_chatBubblePoolResumeMid]
+        jmp dword ptr [g_chatBubblePoolResumeMid]
 L_resume_row:
-        jmp dword ptr[g_chatBubblePoolResume]
+        jmp dword ptr [g_chatBubblePoolResume]
 L_skip:
-        jmp dword ptr[g_chatBubblePoolSkip]
+        jmp dword ptr [g_chatBubblePoolSkip]
+    }
+}
+
+extern "C" __declspec(naked) void ChatBubblePoolNullTrampoline_EdxJe8() {
+    __asm {
+        test edx, edx
+        jnz L_resume_edx
+        mov g_poolNullSaveEcx, ecx
+        mov g_poolNullSaveEax, eax
+        movzx eax, bp
+        push eax
+        call ResolveChatBubblePoolNull_EcxSubstitute
+        add esp, 4
+        test eax, eax
+        je L_fail_edx
+        mov ecx, g_chatBubbleLocalPedOffsetDw
+        mov esi, dword ptr [eax + ecx]
+        test esi, esi
+        je L_fail_edx
+        mov ecx, g_poolNullSaveEcx
+        mov eax, g_poolNullSaveEax
+        jmp dword ptr [g_chatBubblePoolResumeMid]
+L_fail_edx:
+        mov ecx, g_poolNullSaveEcx
+        mov eax, g_poolNullSaveEax
+        jmp dword ptr [g_chatBubblePoolSkip]
+L_resume_edx:
+        jmp dword ptr [g_chatBubblePoolResume]
+    }
+}
+
+extern "C" __declspec(naked) void ChatBubblePoolNullTrampoline_EcxLeaJe12() {
+    __asm {
+        test ecx, ecx
+        jnz L_nonempty_pool
+        mov g_poolNullLeaSaveEdx, edx
+        mov g_poolNullLeaSaveEdi, edi
+        movzx eax, bp
+        push eax
+        call ResolveChatBubblePoolNull_EcxSubstitute
+        add esp, 4
+        test eax, eax
+        je L_restore_skip
+        mov ecx, g_chatBubbleLocalPedOffsetDw
+        mov edi, dword ptr [eax + ecx]
+        test edi, edi
+        je L_restore_skip
+        mov edx, g_poolNullLeaSaveEdx
+        jmp dword ptr [g_chatBubblePoolResumeMid]
+L_restore_skip:
+        mov edi, g_poolNullLeaSaveEdi
+        mov edx, g_poolNullLeaSaveEdx
+        jmp dword ptr [g_chatBubblePoolSkip]
+L_nonempty_pool:
+        lea eax, [edi + edx * 4]
+        jmp dword ptr [g_chatBubblePoolResume]
     }
 }
 
@@ -466,9 +538,20 @@ bool LooksLikeNearJeSkip(const void* address) {
     return bytes[0] == 0x0F && bytes[1] == 0x84;
 }
 
-bool LooksLikeChatBubblePoolNullTestAndJe(const void* address) {
+bool LooksLikeChatBubblePoolNullEcxJe8(const void* address) {
     const auto* bytes = static_cast<const std::uint8_t*>(address);
     return bytes[0] == 0x85 && bytes[1] == 0xC9 && bytes[2] == 0x0F && bytes[3] == 0x84;
+}
+
+bool LooksLikeChatBubblePoolNullEdxJe8(const void* address) {
+    const auto* bytes = static_cast<const std::uint8_t*>(address);
+    return bytes[0] == 0x85 && bytes[1] == 0xD2 && bytes[2] == 0x0F && bytes[3] == 0x84;
+}
+
+bool LooksLikeChatBubblePoolNullEcxLeaJe12(const void* address) {
+    const auto* bytes = static_cast<const std::uint8_t*>(address);
+    return bytes[0] == 0x85 && bytes[1] == 0xC9 && bytes[2] == 0x8D && bytes[3] == 0x04 && bytes[4] == 0x97
+        && bytes[5] == 0x0F && bytes[6] == 0x84;
 }
 
 bool ApplyChatBubblePoolNullTrampoline() {
@@ -476,13 +559,24 @@ bool ApplyChatBubblePoolNullTrampoline() {
         return true;
     }
 
+    const std::uint8_t kind = g_state.version->chatBubblePoolNullTrampKind;
     const std::uint32_t patchRva = g_state.version->chatBubblePoolNullTrampPatchRva;
-    if (patchRva == 0) {
+    if (kind == kChatBubblePoolTrampNone || patchRva == 0) {
         return true;
     }
 
+    const std::size_t patchBytes = (kind == kChatBubblePoolTrampEcxLeaJe12) ? 12u : 8u;
     void* const patchAt = reinterpret_cast<void*>(g_state.sampBase + patchRva);
-    if (!LooksLikeChatBubblePoolNullTestAndJe(patchAt)) {
+
+    bool signatureOk = false;
+    if (kind == kChatBubblePoolTrampEcxJe8) {
+        signatureOk = LooksLikeChatBubblePoolNullEcxJe8(patchAt);
+    } else if (kind == kChatBubblePoolTrampEdxJe8) {
+        signatureOk = LooksLikeChatBubblePoolNullEdxJe8(patchAt);
+    } else if (kind == kChatBubblePoolTrampEcxLeaJe12) {
+        signatureOk = LooksLikeChatBubblePoolNullEcxLeaJe12(patchAt);
+    }
+    if (!signatureOk) {
         return false;
     }
 
@@ -501,18 +595,25 @@ bool ApplyChatBubblePoolNullTrampoline() {
         return false;
     }
 
-    std::memcpy(g_chatBubblePoolEarlyOrig, patchAt, kChatBubblePoolNullTrampPatchBytes);
+    g_chatBubbleLocalPedOffsetDw = g_state.version->localPedOffset;
 
-    std::uint8_t patchBuf[kChatBubblePoolNullTrampPatchBytes]{};
-    if (!BuildJumpPatch(
-            patchBuf,
-            sizeof(patchBuf),
-            patchAt,
-            reinterpret_cast<const void*>(&ChatBubblePoolNullTrampoline_Entry))) {
+    const void* trampEntry = nullptr;
+    if (kind == kChatBubblePoolTrampEcxJe8) {
+        trampEntry = reinterpret_cast<const void*>(&ChatBubblePoolNullTrampoline_EcxJe8);
+    } else if (kind == kChatBubblePoolTrampEdxJe8) {
+        trampEntry = reinterpret_cast<const void*>(&ChatBubblePoolNullTrampoline_EdxJe8);
+    } else {
+        trampEntry = reinterpret_cast<const void*>(&ChatBubblePoolNullTrampoline_EcxLeaJe12);
+    }
+
+    std::memcpy(g_chatBubblePoolEarlyOrig, patchAt, patchBytes);
+
+    std::uint8_t patchBuf[kChatBubblePoolNullTrampPatchBytesMax]{};
+    if (!BuildJumpPatch(patchBuf, patchBytes, patchAt, trampEntry)) {
         return false;
     }
 
-    if (!WriteBytes(patchAt, patchBuf, sizeof(patchBuf))) {
+    if (!WriteBytes(patchAt, patchBuf, patchBytes)) {
         return false;
     }
 
