@@ -1255,7 +1255,7 @@ bool TagOnPlayerIniFileExists(const char* iniPath) {
     return (a & FILE_ATTRIBUTE_DIRECTORY) == 0;
 }
 
-/** Первый запуск: **`tagOnPlayer.ini`** нет — создаём файл целиком (UTF-8, только ASCII; комментарии WinAPI не пишет). */
+/** Первый запуск: нет **`tagOnPlayer.ini`** — создаём файл с дефолтным содержимым (как эталонный `tagOnPlayer.ini`: CRLF). */
 void WriteDefaultTagOnPlayerIniIfAbsent(const char* iniPath) {
     if (TagOnPlayerIniFileExists(iniPath)) {
         return;
@@ -1275,51 +1275,18 @@ void WriteDefaultTagOnPlayerIniIfAbsent(const char* iniPath) {
         "[OverlayCommands]\r\n"
         "Count=14\r\n"
         "Cmd1=/me\r\n"
-        "Color1={FFC2A2}\r\n"
+        "Color1={ff90ff}\r\n"
         "Forward1=1\r\n"
         "BubbleTemplate1={c1}* {0}\r\n"
         "Cmd2=/do\r\n"
         "Color2={D6A2E8}\r\n"
         "Forward2=1\r\n"
         "Cmd3=/todo\r\n"
-        "Color3={C2A2DA}\r\n"
+        "Color3={FFFFFF}\r\n"
         "Forward3=1\r\n"
         "BubbleSplit3=*\r\n"
         "AccentColor3={FF99FF}\r\n"
-        "BubbleTemplate3={c1}{0}*{c2}{1}\r\n"
-        "Cmd4=/try\r\n"
-        "Color4={33AA33}\r\n"
-        "Forward4=1\r\n"
-        "Cmd5=/b\r\n"
-        "Color5={AFAFAF}\r\n"
-        "Forward5=1\r\n"
-        "Cmd6=/s\r\n"
-        "Color6={FFFF99}\r\n"
-        "Forward6=1\r\n"
-        "Cmd7=/w\r\n"
-        "Color7={FFC0C0C0}\r\n"
-        "Forward7=1\r\n"
-        "Cmd8=/n\r\n"
-        "Color8={9ACD32}\r\n"
-        "Forward8=1\r\n"
-        "Cmd9=/r\r\n"
-        "Color9={FF33CC99}\r\n"
-        "Forward9=1\r\n"
-        "Cmd10=/d\r\n"
-        "Color10={FF3399FF}\r\n"
-        "Forward10=1\r\n"
-        "Cmd11=/gov\r\n"
-        "Color11={FF00BFFF}\r\n"
-        "Forward11=1\r\n"
-        "Cmd12=/news\r\n"
-        "Color12=-23296\r\n"
-        "Forward12=1\r\n"
-        "Cmd13=/a\r\n"
-        "Color13={FF6347}\r\n"
-        "Forward13=1\r\n"
-        "Cmd14=/h\r\n"
-        "Color14={FFFF00}\r\n"
-        "Forward14=1\r\n";
+        "BubbleTemplate3={c1}{0}*{c2}{1}";
 
     HANDLE h = CreateFileA(
         iniPath,
