@@ -5,6 +5,7 @@
 #include <array>
 #include <cmath>
 #include <cstdint>
+#include <cstdlib>
 #include <cstring>
 #include <limits>
 
@@ -29,6 +30,10 @@ constexpr char kConfigKeyMirrorOwnChatBubble[] = "MirrorOwnChatBubble";
 constexpr char kConfigKeyChatBubbleLifeMs[] = "ChatBubbleLifeMs";
 constexpr char kDefaultCommand[] = "/tagon";
 constexpr int kDefaultChatBubbleLifeMs = 6000;
+constexpr char kOverlaySection[] = "OverlayCommands";
+constexpr unsigned int kOverlayMaxRules = 16;
+constexpr std::size_t kOverlayCmdMax = 64;
+constexpr std::size_t kChatBubbleLineMax = 256;
 constexpr std::size_t kChatBubbleLocalSkipJePatchBytes = 6;
 constexpr std::size_t kChatBubblePoolNullTrampPatchBytesMax = 12;
 
@@ -144,6 +149,12 @@ using RenderLoopFn = void(__cdecl*)();
 using SendCommandFn = void(__thiscall*)(void*, const char*);
 using LocalPlayerChatFn = void(__thiscall*)(void*, const char*);
 
+struct OverlayCommandRule {
+    char cmd[kOverlayCmdMax]{};
+    D3DCOLOR color = kFallbackLabelColor;
+    bool forwardToServer = true;
+};
+
 struct PluginState {
     HMODULE pluginModule = nullptr;
     HMODULE sampModule = nullptr;
@@ -155,6 +166,8 @@ struct PluginState {
     bool mirrorOwnChatBubble = false;
     int chatBubbleLifeMs = kDefaultChatBubbleLifeMs;
     char toggleCommand[64] = "/tagon";
+    std::array<OverlayCommandRule, kOverlayMaxRules> overlayRules{};
+    unsigned int overlayRuleCount = 0;
 };
 
 PluginState g_state;
@@ -187,14 +200,121 @@ bool StrEqualNoCase(const char* a, const char* b) {
     return *a == *b;
 }
 
-void __fastcall SendCommandDetour(void* thisPtr, void* /*edx*/, const char* text) {
-    if (text && StrEqualNoCase(text, g_state.toggleCommand)) {
-        g_state.renderEnabled = !g_state.renderEnabled;
-        return;
+const char* SkipSpaces(const char* p) {
+    while (*p == ' ' || *p == '\t') {
+        ++p;
     }
-    if (g_originalSendCommand) {
-        g_originalSendCommand(thisPtr, text);
+    return p;
+}
+
+bool FirstTokenEqualsNoCase(const char* line, const char* cmd) {
+    const char* p = SkipSpaces(line);
+    for (; *cmd; ++cmd, ++p) {
+        char c = *p;
+        char d = *cmd;
+        if (d >= 'A' && d <= 'Z') {
+            d += 32;
+        }
+        if (c >= 'A' && c <= 'Z') {
+            c += 32;
+        }
+        if (c != d) {
+            return false;
+        }
     }
+    return *p == '\0' || *p == ' ' || *p == '\t';
+}
+
+const char* RestAfterFirstToken(const char* line) {
+    const char* p = SkipSpaces(line);
+    while (*p != '\0' && *p != ' ' && *p != '\t') {
+        ++p;
+    }
+    return SkipSpaces(p);
+}
+
+bool IsHexDigit(char c) {
+    return (c >= '0' && c <= '9') || (c >= 'A' && c <= 'F') || (c >= 'a' && c <= 'f');
+}
+
+std::uint8_t HexValue(char c) {
+    if (c >= '0' && c <= '9') {
+        return static_cast<std::uint8_t>(c - '0');
+    }
+    if (c >= 'A' && c <= 'F') {
+        return static_cast<std::uint8_t>(10 + c - 'A');
+    }
+    if (c >= 'a' && c <= 'f') {
+        return static_cast<std::uint8_t>(10 + c - 'a');
+    }
+    return 0;
+}
+
+/** SA:MP-стиль: signed dec, `{RRGGBB}` / `{RRGGBBAA}`, `0x` + 8 hex ARGB. */
+bool ParseOverlayColorString(const char* input, D3DCOLOR* outColor) {
+    if (input == nullptr || outColor == nullptr) {
+        return false;
+    }
+
+    const char* s = SkipSpaces(input);
+    if (*s == '\0') {
+        return false;
+    }
+
+    if (*s == '{') {
+        ++s;
+        std::size_t n = 0;
+        while (IsHexDigit(s[n])) {
+            ++n;
+        }
+        if (s[n] != '}' || (n != 6 && n != 8)) {
+            return false;
+        }
+        if (*SkipSpaces(s + n + 1) != '\0') {
+            return false;
+        }
+        std::uint32_t rr = 0;
+        std::uint32_t gg = 0;
+        std::uint32_t bb = 0;
+        std::uint32_t aa = 0xFFu;
+        if (n == 6) {
+            rr = (HexValue(s[0]) << 4) | HexValue(s[1]);
+            gg = (HexValue(s[2]) << 4) | HexValue(s[3]);
+            bb = (HexValue(s[4]) << 4) | HexValue(s[5]);
+        } else {
+            rr = (HexValue(s[0]) << 4) | HexValue(s[1]);
+            gg = (HexValue(s[2]) << 4) | HexValue(s[3]);
+            bb = (HexValue(s[4]) << 4) | HexValue(s[5]);
+            aa = (HexValue(s[6]) << 4) | HexValue(s[7]);
+        }
+        *outColor = (aa << 24) | (rr << 16) | (gg << 8) | bb;
+        return true;
+    }
+
+    if (s[0] == '0' && (s[1] == 'x' || s[1] == 'X')) {
+        s += 2;
+        std::size_t n = 0;
+        while (IsHexDigit(s[n]) && n < 8) {
+            ++n;
+        }
+        if (n != 8 || *SkipSpaces(s + 8) != '\0') {
+            return false;
+        }
+        std::uint32_t v = 0;
+        for (int i = 0; i < 8; ++i) {
+            v = (v << 4) | HexValue(s[i]);
+        }
+        *outColor = v;
+        return true;
+    }
+
+    char* end = nullptr;
+    const long v = std::strtol(s, &end, 10);
+    if (end == s || *SkipSpaces(end) != '\0') {
+        return false;
+    }
+    *outColor = static_cast<D3DCOLOR>(static_cast<std::int32_t>(v));
+    return true;
 }
 
 template <typename T>
@@ -533,6 +653,78 @@ bool BuildLocalDrawContext(LocalDrawContext& context) {
     return true;
 }
 
+bool WantChatBubbleLocalDrawPatches() {
+    return g_state.mirrorOwnChatBubble || g_state.overlayRuleCount > 0;
+}
+
+void PushLocalPlayerChatBubble(
+    const LocalDrawContext& context, const char* text, D3DCOLOR color, int lifeMs) {
+    if (g_state.version == nullptr || context.id == 0) {
+        return;
+    }
+
+    void* const bubble = ReadGlobalObject<void>(g_state.version->refChatBubbleOffset);
+    if (bubble == nullptr) {
+        return;
+    }
+
+    char line[kChatBubbleLineMax] = {};
+    if (text != nullptr) {
+        strncpy_s(line, sizeof(line), text, _TRUNCATE);
+    }
+
+    CallThis<void>(
+        bubble,
+        g_state.version->chatBubbleAddOffset,
+        static_cast<unsigned int>(context.id),
+        line,
+        color,
+        context.distanceToCamera,
+        lifeMs);
+}
+
+void __fastcall SendCommandDetour(void* thisPtr, void* /*edx*/, const char* text) {
+    if (text && StrEqualNoCase(text, g_state.toggleCommand)) {
+        g_state.renderEnabled = !g_state.renderEnabled;
+        return;
+    }
+
+    if (text != nullptr && g_state.overlayRuleCount > 0) {
+        for (unsigned int i = 0; i < g_state.overlayRuleCount; ++i) {
+            const OverlayCommandRule& rule = g_state.overlayRules[i];
+            if (rule.cmd[0] == '\0') {
+                continue;
+            }
+            if (!FirstTokenEqualsNoCase(text, rule.cmd)) {
+                continue;
+            }
+
+            const char* rest = RestAfterFirstToken(text);
+            LocalDrawContext bubbleCtx{};
+            const bool ctxOk = BuildLocalDrawContext(bubbleCtx);
+            if (ctxOk) {
+                if (*rest == '\0') {
+                    PushLocalPlayerChatBubble(bubbleCtx, "", rule.color, 1);
+                } else {
+                    PushLocalPlayerChatBubble(
+                        bubbleCtx, rest, rule.color, g_state.chatBubbleLifeMs);
+                }
+            }
+
+            if (rule.forwardToServer) {
+                if (g_originalSendCommand) {
+                    g_originalSendCommand(thisPtr, text);
+                }
+            }
+            return;
+        }
+    }
+
+    if (g_originalSendCommand) {
+        g_originalSendCommand(thisPtr, text);
+    }
+}
+
 bool LooksLikeNearJeSkip(const void* address) {
     const auto* bytes = static_cast<const std::uint8_t*>(address);
     return bytes[0] == 0x0F && bytes[1] == 0x84;
@@ -671,22 +863,7 @@ void __fastcall LocalPlayerChatDetour(void* thisPtr, void* /*edx*/, const char* 
         return;
     }
 
-    char line[256] = {};
-    strncpy_s(line, sizeof(line), text, _TRUNCATE);
-
-    void* const bubble = ReadGlobalObject<void>(g_state.version->refChatBubbleOffset);
-    if (bubble == nullptr) {
-        return;
-    }
-
-    CallThis<void>(
-        bubble,
-        g_state.version->chatBubbleAddOffset,
-        static_cast<unsigned int>(context.id),
-        line,
-        context.color,
-        context.distanceToCamera,
-        g_state.chatBubbleLifeMs);
+    PushLocalPlayerChatBubble(context, text, context.color, g_state.chatBubbleLifeMs);
 }
 
 void DrawLocalLabel() {
@@ -753,7 +930,7 @@ bool InstallHooks() {
         return false;
     }
 
-    if (g_state.mirrorOwnChatBubble) {
+    if (WantChatBubbleLocalDrawPatches()) {
         if (!ApplyChatBubblePoolNullTrampoline()) {
             return false;
         }
@@ -801,6 +978,48 @@ bool InstallHooks() {
     }
 
     return true;
+}
+
+void LoadOverlayCommands(const char* iniPath) {
+    g_state.overlayRuleCount = 0;
+    g_state.overlayRules = {};
+
+    int count = GetPrivateProfileIntA(kOverlaySection, "Count", 0, iniPath);
+    if (count <= 0) {
+        return;
+    }
+    unsigned int n = static_cast<unsigned int>(count);
+    if (n > kOverlayMaxRules) {
+        n = kOverlayMaxRules;
+    }
+
+    for (unsigned int i = 1; i <= n; ++i) {
+        char keyCmd[24] = {};
+        char keyColor[24] = {};
+        char keyFwd[24] = {};
+        _snprintf_s(keyCmd, _TRUNCATE, "Cmd%u", i);
+        _snprintf_s(keyColor, _TRUNCATE, "Color%u", i);
+        _snprintf_s(keyFwd, _TRUNCATE, "Forward%u", i);
+
+        OverlayCommandRule rule{};
+        GetPrivateProfileStringA(kOverlaySection, keyCmd, "", rule.cmd, static_cast<DWORD>(sizeof(rule.cmd)), iniPath);
+        if (rule.cmd[0] == '\0') {
+            continue;
+        }
+
+        char colorBuf[96] = {};
+        GetPrivateProfileStringA(
+            kOverlaySection, keyColor, "", colorBuf, static_cast<DWORD>(sizeof(colorBuf)), iniPath);
+        if (!ParseOverlayColorString(colorBuf, &rule.color)) {
+            rule.color = kFallbackLabelColor;
+        }
+
+        const int fwd = GetPrivateProfileIntA(kOverlaySection, keyFwd, 1, iniPath);
+        rule.forwardToServer = (fwd != 0);
+
+        g_state.overlayRules[g_state.overlayRuleCount] = rule;
+        ++g_state.overlayRuleCount;
+    }
 }
 
 void BuildDirFromPath(char* dirOut, const char* filePath) {
@@ -870,6 +1089,8 @@ void LoadConfig() {
         life = 600000;
     }
     g_state.chatBubbleLifeMs = life;
+
+    LoadOverlayCommands(iniPath);
 
     WritePrivateProfileStringA(kConfigSection, kConfigKeyCommand, g_state.toggleCommand, iniPath);
     char enabledStr[4] = {};
