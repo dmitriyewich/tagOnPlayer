@@ -33,6 +33,8 @@ constexpr int kDefaultChatBubbleLifeMs = 6000;
 constexpr char kOverlaySection[] = "OverlayCommands";
 constexpr unsigned int kOverlayMaxRules = 16;
 constexpr std::size_t kOverlayCmdMax = 64;
+constexpr std::size_t kOverlayBubbleTemplateMax = 128;
+constexpr std::size_t kOverlayBubbleSplitMax = 16;
 constexpr std::size_t kChatBubbleLineMax = 256;
 constexpr std::size_t kChatBubbleLocalSkipJePatchBytes = 6;
 constexpr std::size_t kChatBubblePoolNullTrampPatchBytesMax = 12;
@@ -153,6 +155,10 @@ struct OverlayCommandRule {
     char cmd[kOverlayCmdMax]{};
     D3DCOLOR color = kFallbackLabelColor;
     bool forwardToServer = true;
+    char bubbleTemplate[kOverlayBubbleTemplateMax]{};
+    char bubbleSplit[kOverlayBubbleSplitMax]{};
+    D3DCOLOR accentColor = kFallbackLabelColor;
+    bool accentColorValid = false;
 };
 
 struct PluginState {
@@ -311,6 +317,168 @@ bool ParseOverlayColorString(const char* input, D3DCOLOR* outColor) {
     }
     *outColor = static_cast<D3DCOLOR>(static_cast<std::int32_t>(v));
     return true;
+}
+
+static char HexDigitUpper(std::uint8_t nibble) {
+    nibble &= 0x0Fu;
+    return static_cast<char>(nibble < 10 ? ('0' + nibble) : ('A' + (nibble - 10)));
+}
+
+/** Добавляет в `out` строку `{RRGGBB}` из канонического **AARRGGBB** (как `ColorN`). `*used` — длина без `\0`. */
+bool AppendCanonicalColorAsChatEmbed(char* out, std::size_t cap, std::size_t& used, D3DCOLOR canonicalArgb) {
+    if (out == nullptr || cap == 0) {
+        return false;
+    }
+    const std::uint32_t u = static_cast<std::uint32_t>(canonicalArgb);
+    const std::uint8_t r = static_cast<std::uint8_t>((u >> 16) & 0xFFu);
+    const std::uint8_t g = static_cast<std::uint8_t>((u >> 8) & 0xFFu);
+    const std::uint8_t b = static_cast<std::uint8_t>(u & 0xFFu);
+    char embed[9] = {
+        '{',
+        HexDigitUpper(static_cast<std::uint8_t>(r >> 4)),
+        HexDigitUpper(r),
+        HexDigitUpper(static_cast<std::uint8_t>(g >> 4)),
+        HexDigitUpper(g),
+        HexDigitUpper(static_cast<std::uint8_t>(b >> 4)),
+        HexDigitUpper(b),
+        '}',
+        '\0'};
+    const std::size_t n = std::strlen(embed);
+    if (used + n + 1 > cap) {
+        return false;
+    }
+    std::memcpy(out + used, embed, n);
+    used += n;
+    out[used] = '\0';
+    return true;
+}
+
+bool AppendCStringTrunc(char* out, std::size_t cap, std::size_t& used, const char* s) {
+    if (out == nullptr || cap == 0 || s == nullptr) {
+        return false;
+    }
+    const std::size_t n = std::strlen(s);
+    if (used + n + 1 > cap) {
+        return false;
+    }
+    std::memcpy(out + used, s, n);
+    used += n;
+    out[used] = '\0';
+    return true;
+}
+
+bool AppendChar(char* out, std::size_t cap, std::size_t& used, char c) {
+    if (used + 2 > cap) {
+        return false;
+    }
+    out[used] = c;
+    ++used;
+    out[used] = '\0';
+    return true;
+}
+
+void TrimCopyRange(const char* begin, const char* endExclusive, char* dest, std::size_t destCap) {
+    if (dest == nullptr || destCap == 0) {
+        return;
+    }
+    const char* a = begin;
+    while (a < endExclusive && (*a == ' ' || *a == '\t')) {
+        ++a;
+    }
+    const char* b = endExclusive;
+    while (b > a && (b[-1] == ' ' || b[-1] == '\t')) {
+        --b;
+    }
+    const std::size_t n = static_cast<std::size_t>(b - a);
+    const std::size_t copyN = (n >= destCap) ? (destCap - 1) : n;
+    if (copyN > 0) {
+        std::memcpy(dest, a, copyN);
+    }
+    dest[copyN] = '\0';
+}
+
+void SplitRestIntoSegments(
+    const char* rest,
+    const char* splitSubstr,
+    char* seg0,
+    char* seg1,
+    std::size_t segCap) {
+    if (seg0 == nullptr || seg1 == nullptr || segCap == 0) {
+        return;
+    }
+    seg0[0] = '\0';
+    seg1[0] = '\0';
+    if (rest == nullptr) {
+        return;
+    }
+    if (splitSubstr == nullptr || splitSubstr[0] == '\0') {
+        TrimCopyRange(rest, rest + std::strlen(rest), seg0, segCap);
+        return;
+    }
+    const char* hit = std::strstr(rest, splitSubstr);
+    if (hit == nullptr) {
+        TrimCopyRange(rest, rest + std::strlen(rest), seg0, segCap);
+        return;
+    }
+    TrimCopyRange(rest, hit, seg0, segCap);
+    const char* after = hit + std::strlen(splitSubstr);
+    TrimCopyRange(after, after + std::strlen(after), seg1, segCap);
+}
+
+void BuildOverlayBubbleText(char* out, std::size_t cap, const OverlayCommandRule& rule, const char* rest) {
+    if (out == nullptr || cap == 0) {
+        return;
+    }
+    out[0] = '\0';
+    if (rest == nullptr) {
+        return;
+    }
+    if (rule.bubbleTemplate[0] == '\0') {
+        strncpy_s(out, cap, rest, _TRUNCATE);
+        return;
+    }
+
+    char seg0[kChatBubbleLineMax] = {};
+    char seg1[kChatBubbleLineMax] = {};
+    SplitRestIntoSegments(rest, rule.bubbleSplit, seg0, seg1, sizeof(seg0));
+
+    std::size_t used = 0;
+    const D3DCOLOR c2 = rule.accentColorValid ? rule.accentColor : rule.color;
+
+    for (const char* p = rule.bubbleTemplate; *p != '\0';) {
+        if (p[0] == '{' && p[1] == '0' && p[2] == '}') {
+            if (!AppendCStringTrunc(out, cap, used, seg0)) {
+                return;
+            }
+            p += 3;
+            continue;
+        }
+        if (p[0] == '{' && p[1] == '1' && p[2] == '}') {
+            if (!AppendCStringTrunc(out, cap, used, seg1)) {
+                return;
+            }
+            p += 3;
+            continue;
+        }
+        if (p[0] == '{' && p[1] == 'c' && p[2] == '1' && p[3] == '}') {
+            if (!AppendCanonicalColorAsChatEmbed(out, cap, used, rule.color)) {
+                return;
+            }
+            p += 4;
+            continue;
+        }
+        if (p[0] == '{' && p[1] == 'c' && p[2] == '2' && p[3] == '}') {
+            if (!AppendCanonicalColorAsChatEmbed(out, cap, used, c2)) {
+                return;
+            }
+            p += 4;
+            continue;
+        }
+        if (!AppendChar(out, cap, used, *p)) {
+            return;
+        }
+        ++p;
+    }
 }
 
 template <typename T>
@@ -726,8 +894,10 @@ void __fastcall SendCommandDetour(void* thisPtr, void* /*edx*/, const char* text
                 if (*rest == '\0') {
                     PushLocalPlayerChatBubble(bubbleCtx, "", rule.color, 1);
                 } else {
+                    char bubbleText[kChatBubbleLineMax] = {};
+                    BuildOverlayBubbleText(bubbleText, sizeof(bubbleText), rule, rest);
                     PushLocalPlayerChatBubble(
-                        bubbleCtx, rest, rule.color, g_state.chatBubbleLifeMs);
+                        bubbleCtx, bubbleText, rule.color, g_state.chatBubbleLifeMs);
                 }
             }
             return;
@@ -1011,9 +1181,15 @@ void LoadOverlayCommands(const char* iniPath) {
         char keyCmd[24] = {};
         char keyColor[24] = {};
         char keyFwd[24] = {};
+        char keyTpl[32] = {};
+        char keySplit[32] = {};
+        char keyAccent[32] = {};
         _snprintf_s(keyCmd, _TRUNCATE, "Cmd%u", i);
         _snprintf_s(keyColor, _TRUNCATE, "Color%u", i);
         _snprintf_s(keyFwd, _TRUNCATE, "Forward%u", i);
+        _snprintf_s(keyTpl, _TRUNCATE, "BubbleTemplate%u", i);
+        _snprintf_s(keySplit, _TRUNCATE, "BubbleSplit%u", i);
+        _snprintf_s(keyAccent, _TRUNCATE, "AccentColor%u", i);
 
         OverlayCommandRule rule{};
         GetPrivateProfileStringA(kOverlaySection, keyCmd, "", rule.cmd, static_cast<DWORD>(sizeof(rule.cmd)), iniPath);
@@ -1031,6 +1207,28 @@ void LoadOverlayCommands(const char* iniPath) {
         const int fwd = GetPrivateProfileIntA(kOverlaySection, keyFwd, 1, iniPath);
         rule.forwardToServer = (fwd != 0);
 
+        GetPrivateProfileStringA(
+            kOverlaySection,
+            keyTpl,
+            "",
+            rule.bubbleTemplate,
+            static_cast<DWORD>(sizeof(rule.bubbleTemplate)),
+            iniPath);
+        GetPrivateProfileStringA(
+            kOverlaySection,
+            keySplit,
+            "",
+            rule.bubbleSplit,
+            static_cast<DWORD>(sizeof(rule.bubbleSplit)),
+            iniPath);
+
+        char accentBuf[96] = {};
+        GetPrivateProfileStringA(
+            kOverlaySection, keyAccent, "", accentBuf, static_cast<DWORD>(sizeof(accentBuf)), iniPath);
+        if (accentBuf[0] != '\0' && ParseOverlayColorString(accentBuf, &rule.accentColor)) {
+            rule.accentColorValid = true;
+        }
+
         g_state.overlayRules[g_state.overlayRuleCount] = rule;
         ++g_state.overlayRuleCount;
     }
@@ -1047,6 +1245,97 @@ void BuildDirFromPath(char* dirOut, const char* filePath) {
     } else {
         dirOut[0] = '\0';
     }
+}
+
+bool TagOnPlayerIniFileExists(const char* iniPath) {
+    const DWORD a = GetFileAttributesA(iniPath);
+    if (a == INVALID_FILE_ATTRIBUTES) {
+        return false;
+    }
+    return (a & FILE_ATTRIBUTE_DIRECTORY) == 0;
+}
+
+/** Первый запуск: **`tagOnPlayer.ini`** нет — создаём файл целиком (UTF-8, только ASCII; комментарии WinAPI не пишет). */
+void WriteDefaultTagOnPlayerIniIfAbsent(const char* iniPath) {
+    if (TagOnPlayerIniFileExists(iniPath)) {
+        return;
+    }
+    static const char kBody[] =
+        "[Settings]\r\n"
+        "Command=/tagon\r\n"
+        "EnabledByDefault=1\r\n"
+        "MirrorOwnChatBubble=1\r\n"
+        "ChatBubbleLifeMs=6000\r\n"
+        "\r\n"
+        "; [OverlayCommands] ColorN: only {RRGGBB}, {AARRGGBB} (dword ARGB), or signed decimal D3DCOLOR.\r\n"
+        "; Optional: BubbleTemplateN, BubbleSplitN, AccentColorN\r\n"
+        "; Placeholders: {0} first segment, {1} after first BubbleSplit, {c1}/{c2} embed {RRGGBB} from ColorN / "
+        "AccentColorN\r\n"
+        "; IC speech without /cmd is not matched here.\r\n"
+        "[OverlayCommands]\r\n"
+        "Count=14\r\n"
+        "Cmd1=/me\r\n"
+        "Color1={FFC2A2}\r\n"
+        "Forward1=1\r\n"
+        "BubbleTemplate1={c1}* {0}\r\n"
+        "Cmd2=/do\r\n"
+        "Color2={D6A2E8}\r\n"
+        "Forward2=1\r\n"
+        "Cmd3=/todo\r\n"
+        "Color3={C2A2DA}\r\n"
+        "Forward3=1\r\n"
+        "BubbleSplit3=*\r\n"
+        "AccentColor3={FF99FF}\r\n"
+        "BubbleTemplate3={c1}{0}*{c2}{1}\r\n"
+        "Cmd4=/try\r\n"
+        "Color4={33AA33}\r\n"
+        "Forward4=1\r\n"
+        "Cmd5=/b\r\n"
+        "Color5={AFAFAF}\r\n"
+        "Forward5=1\r\n"
+        "Cmd6=/s\r\n"
+        "Color6={FFFF99}\r\n"
+        "Forward6=1\r\n"
+        "Cmd7=/w\r\n"
+        "Color7={FFC0C0C0}\r\n"
+        "Forward7=1\r\n"
+        "Cmd8=/n\r\n"
+        "Color8={9ACD32}\r\n"
+        "Forward8=1\r\n"
+        "Cmd9=/r\r\n"
+        "Color9={FF33CC99}\r\n"
+        "Forward9=1\r\n"
+        "Cmd10=/d\r\n"
+        "Color10={FF3399FF}\r\n"
+        "Forward10=1\r\n"
+        "Cmd11=/gov\r\n"
+        "Color11={FF00BFFF}\r\n"
+        "Forward11=1\r\n"
+        "Cmd12=/news\r\n"
+        "Color12=-23296\r\n"
+        "Forward12=1\r\n"
+        "Cmd13=/a\r\n"
+        "Color13={FF6347}\r\n"
+        "Forward13=1\r\n"
+        "Cmd14=/h\r\n"
+        "Color14={FFFF00}\r\n"
+        "Forward14=1\r\n";
+
+    HANDLE h = CreateFileA(
+        iniPath,
+        GENERIC_WRITE,
+        FILE_SHARE_READ,
+        nullptr,
+        CREATE_NEW,
+        FILE_ATTRIBUTE_NORMAL,
+        nullptr);
+    if (h == INVALID_HANDLE_VALUE) {
+        return;
+    }
+    const DWORD n = static_cast<DWORD>(sizeof(kBody) - 1u);
+    DWORD written = 0;
+    WriteFile(h, kBody, n, &written, nullptr);
+    CloseHandle(h);
 }
 
 void LoadConfig() {
@@ -1081,6 +1370,8 @@ void LoadConfig() {
     char iniPath[MAX_PATH] = {};
     _snprintf_s(iniPath, _TRUNCATE, "%stagOnPlayer.ini", dirPath);
 
+    WriteDefaultTagOnPlayerIniIfAbsent(iniPath);
+
     char commandBuf[64] = {};
     GetPrivateProfileStringA(kConfigSection, kConfigKeyCommand, "", commandBuf, sizeof(commandBuf), iniPath);
     if (commandBuf[0] == '\0') {
@@ -1091,7 +1382,7 @@ void LoadConfig() {
     int enabled = GetPrivateProfileIntA(kConfigSection, kConfigKeyEnabled, 1, iniPath);
     g_state.renderEnabled = (enabled != 0);
 
-    int mirror = GetPrivateProfileIntA(kConfigSection, kConfigKeyMirrorOwnChatBubble, 0, iniPath);
+    int mirror = GetPrivateProfileIntA(kConfigSection, kConfigKeyMirrorOwnChatBubble, 1, iniPath);
     g_state.mirrorOwnChatBubble = (mirror != 0);
 
     int life = GetPrivateProfileIntA(
