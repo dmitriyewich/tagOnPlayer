@@ -250,7 +250,32 @@ std::uint8_t HexValue(char c) {
     return 0;
 }
 
-/** SA:MP-стиль: signed dec, `{RRGGBB}` / `{RRGGBBAA}`, `0x` + 8 hex ARGB. */
+/** Ровно 6 hex-цифр: `RRGGBB`, альфа в dword — `FF`. */
+bool PackD3dArgbFromRrggbb6(const char* digits, D3DCOLOR* outColor) {
+    if (outColor == nullptr) {
+        return false;
+    }
+    const std::uint32_t rr = (HexValue(digits[0]) << 4) | HexValue(digits[1]);
+    const std::uint32_t gg = (HexValue(digits[2]) << 4) | HexValue(digits[3]);
+    const std::uint32_t bb = (HexValue(digits[4]) << 4) | HexValue(digits[5]);
+    *outColor = (0xFFu << 24) | (rr << 16) | (gg << 8) | bb;
+    return true;
+}
+
+/** Ровно 8 hex-цифр: `AARRGGBB` (как dword D3DCOLOR). */
+bool PackD3dArgbFromAarrggbb8(const char* digits, D3DCOLOR* outColor) {
+    if (outColor == nullptr) {
+        return false;
+    }
+    const std::uint32_t aa = (HexValue(digits[0]) << 4) | HexValue(digits[1]);
+    const std::uint32_t rr = (HexValue(digits[2]) << 4) | HexValue(digits[3]);
+    const std::uint32_t gg = (HexValue(digits[4]) << 4) | HexValue(digits[5]);
+    const std::uint32_t bb = (HexValue(digits[6]) << 4) | HexValue(digits[7]);
+    *outColor = (aa << 24) | (rr << 16) | (gg << 8) | bb;
+    return true;
+}
+
+/** INI `ColorN`: только `{RRGGBB}`, `{AARRGGBB}` или десятичный signed D3DCOLOR ([Color list](https://sampwiki.blast.hk/wiki/Color_list)). */
 bool ParseOverlayColorString(const char* input, D3DCOLOR* outColor) {
     if (input == nullptr || outColor == nullptr) {
         return false;
@@ -273,39 +298,10 @@ bool ParseOverlayColorString(const char* input, D3DCOLOR* outColor) {
         if (*SkipSpaces(s + n + 1) != '\0') {
             return false;
         }
-        std::uint32_t rr = 0;
-        std::uint32_t gg = 0;
-        std::uint32_t bb = 0;
-        std::uint32_t aa = 0xFFu;
         if (n == 6) {
-            rr = (HexValue(s[0]) << 4) | HexValue(s[1]);
-            gg = (HexValue(s[2]) << 4) | HexValue(s[3]);
-            bb = (HexValue(s[4]) << 4) | HexValue(s[5]);
-        } else {
-            rr = (HexValue(s[0]) << 4) | HexValue(s[1]);
-            gg = (HexValue(s[2]) << 4) | HexValue(s[3]);
-            bb = (HexValue(s[4]) << 4) | HexValue(s[5]);
-            aa = (HexValue(s[6]) << 4) | HexValue(s[7]);
+            return PackD3dArgbFromRrggbb6(s, outColor);
         }
-        *outColor = (aa << 24) | (rr << 16) | (gg << 8) | bb;
-        return true;
-    }
-
-    if (s[0] == '0' && (s[1] == 'x' || s[1] == 'X')) {
-        s += 2;
-        std::size_t n = 0;
-        while (IsHexDigit(s[n]) && n < 8) {
-            ++n;
-        }
-        if (n != 8 || *SkipSpaces(s + 8) != '\0') {
-            return false;
-        }
-        std::uint32_t v = 0;
-        for (int i = 0; i < 8; ++i) {
-            v = (v << 4) | HexValue(s[i]);
-        }
-        *outColor = v;
-        return true;
+        return PackD3dArgbFromAarrggbb8(s, outColor);
     }
 
     char* end = nullptr;
@@ -501,7 +497,10 @@ extern "C" __declspec(naked) void ChatBubblePoolNullTrampoline_EcxJe8() {
         mov eax, g_poolNullRowEax
         test ecx, ecx
         je L_skip
-        mov edi, dword ptr [ecx]
+        push edx
+        mov edx, g_chatBubbleLocalPedOffsetDw
+        mov edi, dword ptr [ecx + edx]
+        pop edx
         test edi, edi
         je L_skip
         jmp dword ptr [g_chatBubblePoolResumeMid]
@@ -657,6 +656,16 @@ bool WantChatBubbleLocalDrawPatches() {
     return g_state.mirrorOwnChatBubble || g_state.overlayRuleCount > 0;
 }
 
+/** Канонический AARRGGBB (как у `DrawLabel` / wiki) → dword для `CChatBubble::Add`: иначе {FF90FF} рисуется как FFFF90. */
+D3DCOLOR ChatBubbleAddColorFromCanonicalArgb(D3DCOLOR canonical) {
+    const std::uint32_t u = static_cast<std::uint32_t>(canonical);
+    const std::uint32_t a = (u >> 24) & 0xFFu;
+    const std::uint32_t r = (u >> 16) & 0xFFu;
+    const std::uint32_t g = (u >> 8) & 0xFFu;
+    const std::uint32_t b = u & 0xFFu;
+    return static_cast<D3DCOLOR>((a << 24) | (g << 16) | (b << 8) | r);
+}
+
 void PushLocalPlayerChatBubble(
     const LocalDrawContext& context, const char* text, D3DCOLOR color, int lifeMs) {
     if (g_state.version == nullptr || context.id == 0) {
@@ -673,12 +682,14 @@ void PushLocalPlayerChatBubble(
         strncpy_s(line, sizeof(line), text, _TRUNCATE);
     }
 
+    const D3DCOLOR addColor = ChatBubbleAddColorFromCanonicalArgb(color);
+
     CallThis<void>(
         bubble,
         g_state.version->chatBubbleAddOffset,
         static_cast<unsigned int>(context.id),
         line,
-        color,
+        addColor,
         context.distanceToCamera,
         lifeMs);
 }
@@ -702,18 +713,21 @@ void __fastcall SendCommandDetour(void* thisPtr, void* /*edx*/, const char* text
             const char* rest = RestAfterFirstToken(text);
             LocalDrawContext bubbleCtx{};
             const bool ctxOk = BuildLocalDrawContext(bubbleCtx);
+
+            // Сначала штатный `SendCommand`, иначе SA:MP снова кладёт бабл (напр. /me с цветом по умолчанию)
+            // в тот же слот и перезаписывает наш `Add` с `ColorN`.
+            if (rule.forwardToServer) {
+                if (g_originalSendCommand) {
+                    g_originalSendCommand(thisPtr, text);
+                }
+            }
+
             if (ctxOk) {
                 if (*rest == '\0') {
                     PushLocalPlayerChatBubble(bubbleCtx, "", rule.color, 1);
                 } else {
                     PushLocalPlayerChatBubble(
                         bubbleCtx, rest, rule.color, g_state.chatBubbleLifeMs);
-                }
-            }
-
-            if (rule.forwardToServer) {
-                if (g_originalSendCommand) {
-                    g_originalSendCommand(thisPtr, text);
                 }
             }
             return;
@@ -863,7 +877,7 @@ void __fastcall LocalPlayerChatDetour(void* thisPtr, void* /*edx*/, const char* 
         return;
     }
 
-    PushLocalPlayerChatBubble(context, text, context.color, g_state.chatBubbleLifeMs);
+    PushLocalPlayerChatBubble(context, text, kFallbackLabelColor, g_state.chatBubbleLifeMs);
 }
 
 void DrawLocalLabel() {
