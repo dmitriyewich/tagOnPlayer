@@ -5,15 +5,13 @@
 #include <array>
 #include <cmath>
 #include <cstdint>
-#include <cstdlib>
 #include <cstring>
 #include <limits>
 
+#include "chat_bubble.h"
 #include "external/MinHook/include/MinHook.h"
 
 static_assert(sizeof(void*) == 4, "tagOnPlayer.asi must be built for Win32.");
-
-using D3DCOLOR = std::uint32_t;
 
 namespace {
 
@@ -31,26 +29,8 @@ constexpr char kConfigKeyChatBubbleLifeMs[] = "ChatBubbleLifeMs";
 /** Дефолт ширины строки бабла (px), если INI без ключа; по rizin во всех строках `kSupportedVersions` — **257** (`push 0x101` перед внутренним `DrawText`). */
 constexpr char kConfigKeyOverlayBubbleLinePx[] = "OverlayBubbleLinePx";
 constexpr char kDefaultCommand[] = "/tagon";
-constexpr int kDefaultChatBubbleLifeMs = 6000;
-constexpr int kDefaultOverlayBubbleLinePx = 257;
+constexpr std::size_t kToggleCommandMax = 64;
 constexpr char kOverlaySection[] = "OverlayCommands";
-constexpr unsigned int kOverlayMaxRules = 16;
-constexpr std::size_t kOverlayCmdMax = 64;
-constexpr std::size_t kOverlayBubbleTemplateMax = 128;
-constexpr std::size_t kOverlayBubbleSplitMax = 16;
-constexpr std::size_t kChatBubbleLineMax = 256;
-constexpr std::size_t kChatBubbleLocalSkipJePatchBytes = 6;
-constexpr std::size_t kChatBubblePoolNullTrampPatchBytesMax = 11;
-constexpr std::size_t kChatBubbleRemoteChainGuardPatchBytes = 5;
-
-/** 0 — нет патча; иначе см. `chatBubblePoolNullTrampKind`. */
-constexpr std::uint8_t kChatBubblePoolTrampNone = 0;
-/** R1: `test ecx` + near-`je` (8 байт); `resume` / `resumeMid` как сейчас. */
-constexpr std::uint8_t kChatBubblePoolTrampEcxJe8 = 1;
-/** R3 / R3-1: `test edx` + near-`je` (8); подстановка — `esi = *(void**)((uint8_t*)lp + localPedOffset)`. */
-constexpr std::uint8_t kChatBubblePoolTrampEdxJe8 = 2;
-/** R2, R4, R4-2, R5-1, DL-R1: `test ecx` + `lea eax,[edi+edx*4]` + near-`je` (11). */
-constexpr std::uint8_t kChatBubblePoolTrampEcxLeaJe11 = 3;
 
 struct CVector {
     float x;
@@ -87,62 +67,6 @@ struct GameCamera {
     GamePlaceable placeable;
 };
 
-enum class SampVersion {
-    R1,
-    R2,
-    R3,
-    R3_1,
-    R4,
-    R4_2,
-    R5_1,
-    DL_R1,
-};
-
-struct SampVersionInfo {
-    DWORD entryPointRva;
-    SampVersion version;
-    const char* name;
-    std::uint32_t refNetGameOffset;
-    std::uint32_t refPlayerTagsOffset;
-    std::uint32_t labelLoopOffset;
-    std::uint32_t healthLoopOffset;
-    std::uint32_t sendCommandOffset;
-    std::uint32_t beginLabelOffset;
-    std::uint32_t endLabelOffset;
-    std::uint32_t drawLabelOffset;
-    std::uint32_t beginHealthBarOffset;
-    std::uint32_t endHealthBarOffset;
-    std::uint32_t drawHealthBarOffset;
-    std::uint32_t getPlayerPoolOffset;
-    std::uint32_t getLocalPlayerOffset;
-    std::uint32_t getNameByIdOffset;
-    std::uint32_t getLocalPlayerColorArgbOffset;
-    std::uint32_t pedIsOnScreenOffset;
-    std::uint32_t pedGetHealthOffset;
-    std::uint32_t pedGetArmourOffset;
-    std::uint32_t pedGetBonePositionOffset;
-    std::uint32_t localPlayerIdOffset;
-    std::uint32_t localPedOffset;
-    std::uint32_t localPlayerChatOffset;
-    std::uint32_t refChatBubbleOffset;
-    std::uint32_t chatBubbleAddOffset;
-    std::uint32_t chatBubbleDrawOffset;
-    std::uint32_t chatBubbleLocalSkipJeRva;
-    /** R1: после mov ecx,[row+0xfde]; test ecx; near-je на конец итерации — для локального слота ecx==0. */
-    std::uint32_t chatBubblePoolNullTrampPatchRva;
-    std::uint32_t chatBubblePoolNullTrampResumeRva;
-    /** После подстановки локального слота: продолжение `CChatBubble::Draw`, где ped уже лежит в нужном регистре. */
-    std::uint32_t chatBubblePoolNullTrampResumeMidRva;
-    std::uint32_t chatBubblePoolNullTrampSkipRva;
-    /** Extra guards for unsafe remote-chain loads in clients that need them; 0 disables. */
-    std::uint32_t chatBubbleRemoteChainLoadGuardRva;
-    std::uint32_t chatBubbleRemoteChainPedGuardRva;
-    /** `kChatBubblePoolTramp*`; размер патча 8 при 1–2, 11 при 3. */
-    std::uint8_t chatBubblePoolNullTrampKind;
-    /** Ширина строки текста бабла в клиенте (px), для дефолта `OverlayBubbleLinePx` после детекта версии. */
-    std::uint16_t sampBubbleDrawTextLinePx;
-};
-
 constexpr std::array<SampVersionInfo, 8> kSupportedVersions{{
     // chatBubbleDrawOffset — RVA CChatBubble::Draw (канон SAMP-API / rizin); chatBubbleLocalSkipJeRva — начало near-je
     // «пропуск слота», если флаг видимости бабла нулевой (в т.ч. локальный игрок); патч: 6×NOP поверх 0F 84 …
@@ -159,17 +83,6 @@ constexpr std::array<SampVersionInfo, 8> kSupportedVersions{{
 /** Циклы тегов — `CPlayerTags::__thiscall` (`this` в `ECX`). Хук — `__fastcall(void*,void*)`: тот же `ECX`, второй аргумент в `EDX` не используется (совместимо с точкой входа). */
 using RenderLoopFn = void(__thiscall*)(void* thisPtr);
 using SendCommandFn = void(__thiscall*)(void*, const char*);
-using LocalPlayerChatFn = void(__thiscall*)(void*, const char*);
-
-struct OverlayCommandRule {
-    char cmd[kOverlayCmdMax]{};
-    D3DCOLOR color = kFallbackLabelColor;
-    bool forwardToServer = true;
-    char bubbleTemplate[kOverlayBubbleTemplateMax]{};
-    char bubbleSplit[kOverlayBubbleSplitMax]{};
-    D3DCOLOR accentColor = kFallbackLabelColor;
-    bool accentColorValid = false;
-};
 
 struct PluginState {
     HMODULE pluginModule = nullptr;
@@ -180,121 +93,16 @@ struct PluginState {
     RenderLoopFn originalHealthLoop = nullptr;
     bool renderEnabled = true;
     bool mirrorOwnChatBubble = false;
-    int chatBubbleLifeMs = kDefaultChatBubbleLifeMs;
+    int chatBubbleLifeMs = chat_bubble::kDefaultLifeMs;
     /** `0` — не вставлять `\n` перед `{RRGGBB}`; иначе макс. ширина строки (px), R1 из rizin. */
-    int overlayBubbleLinePx = kDefaultOverlayBubbleLinePx;
-    char toggleCommand[64] = "/tagon";
-    std::array<OverlayCommandRule, kOverlayMaxRules> overlayRules{};
+    int overlayBubbleLinePx = chat_bubble::kDefaultOverlayLinePx;
+    char toggleCommand[kToggleCommandMax] = "/tagon";
+    std::array<chat_bubble::OverlayCommandRule, chat_bubble::kOverlayMaxRules> overlayRules{};
     unsigned int overlayRuleCount = 0;
 };
 
 PluginState g_state;
 SendCommandFn g_originalSendCommand = nullptr;
-LocalPlayerChatFn g_originalLocalPlayerChat = nullptr;
-
-static HDC g_overlayBubbleMeasureDc = nullptr;
-static HFONT g_overlayBubbleMeasureFont = nullptr;
-static HFONT g_overlayBubbleMeasureOldFont = nullptr;
-
-void OverlayBubbleMeasureShutdown() {
-    if (g_overlayBubbleMeasureDc != nullptr) {
-        if (g_overlayBubbleMeasureFont != nullptr) {
-            SelectObject(g_overlayBubbleMeasureDc, g_overlayBubbleMeasureOldFont);
-            DeleteObject(g_overlayBubbleMeasureFont);
-            g_overlayBubbleMeasureFont = nullptr;
-            g_overlayBubbleMeasureOldFont = nullptr;
-        }
-        DeleteDC(g_overlayBubbleMeasureDc);
-        g_overlayBubbleMeasureDc = nullptr;
-    }
-}
-
-bool OverlayBubbleMeasureEnsure() {
-    if (g_overlayBubbleMeasureDc != nullptr) {
-        return true;
-    }
-    HDC screen = GetDC(nullptr);
-    if (screen == nullptr) {
-        return false;
-    }
-    g_overlayBubbleMeasureDc = CreateCompatibleDC(screen);
-    ReleaseDC(nullptr, screen);
-    if (g_overlayBubbleMeasureDc == nullptr) {
-        return false;
-    }
-    /* R1 rizin: `ps @ 0x100d8028` → Arial; у `0x1006739b` — Height 10, Weight 700 для D3DXCreateFont. */
-    g_overlayBubbleMeasureFont = CreateFontA(
-        -11,
-        0,
-        0,
-        0,
-        FW_BOLD,
-        FALSE,
-        FALSE,
-        FALSE,
-        DEFAULT_CHARSET,
-        OUT_DEFAULT_PRECIS,
-        CLIP_DEFAULT_PRECIS,
-        CLEARTYPE_QUALITY,
-        DEFAULT_PITCH | FF_DONTCARE,
-        "Arial");
-    if (g_overlayBubbleMeasureFont == nullptr) {
-        DeleteDC(g_overlayBubbleMeasureDc);
-        g_overlayBubbleMeasureDc = nullptr;
-        return false;
-    }
-    g_overlayBubbleMeasureOldFont =
-        static_cast<HFONT>(SelectObject(g_overlayBubbleMeasureDc, g_overlayBubbleMeasureFont));
-    return true;
-}
-
-int OverlayBubbleMeasureCharWidthA(char c) {
-    char s[2] = {c, '\0'};
-    SIZE sz = {};
-    if (g_overlayBubbleMeasureDc == nullptr || !GetTextExtentPoint32A(g_overlayBubbleMeasureDc, s, 1, &sz)) {
-        return 7;
-    }
-    return static_cast<int>(sz.cx);
-}
-
-void OverlayBubbleAdvanceLineLayout(int maxLinePx, int& linePx, const char* s, std::size_t len) {
-    for (std::size_t i = 0; i < len; ++i) {
-        const int w = OverlayBubbleMeasureCharWidthA(s[i]);
-        if (linePx + w > maxLinePx) {
-            linePx = w;
-        } else {
-            linePx += w;
-        }
-    }
-}
-
-/** Перенос посередине 8-символьного `{RRGGBB}` при той же эвристике ширины, что в плагине. */
-bool OverlayBubbleColorEmbedSplitsMidLine(int maxLinePx, int linePx, const char embed[9]) {
-    int x = linePx;
-    for (int i = 0; i < 8; ++i) {
-        const int w = OverlayBubbleMeasureCharWidthA(embed[i]);
-        if (x + w <= maxLinePx) {
-            x += w;
-            continue;
-        }
-        if (i > 0) {
-            return true;
-        }
-        x = w;
-    }
-    return false;
-}
-
-std::uint8_t g_chatBubbleJeOrig[kChatBubbleLocalSkipJePatchBytes] = {};
-std::uint8_t g_chatBubblePoolEarlyOrig[kChatBubblePoolNullTrampPatchBytesMax] = {};
-std::uint8_t g_chatBubbleRemoteChainLoadOrig[kChatBubbleRemoteChainGuardPatchBytes] = {};
-std::uint8_t g_chatBubbleRemoteChainPedOrig[kChatBubbleRemoteChainGuardPatchBytes] = {};
-
-static void* g_chatBubblePoolResume = nullptr;
-static void* g_chatBubblePoolResumeMid = nullptr;
-static void* g_chatBubblePoolSkip = nullptr;
-static void* g_chatBubbleRemoteChainLoadResume = nullptr;
-static void* g_chatBubbleRemoteChainPedResume = nullptr;
 static char g_tagOnPlayerIniPath[MAX_PATH] = {};
 
 bool StrEqualNoCase(const char* a, const char* b) {
@@ -341,282 +149,6 @@ const char* RestAfterFirstToken(const char* line) {
         ++p;
     }
     return SkipSpaces(p);
-}
-
-bool IsHexDigit(char c) {
-    return (c >= '0' && c <= '9') || (c >= 'A' && c <= 'F') || (c >= 'a' && c <= 'f');
-}
-
-std::uint8_t HexValue(char c) {
-    if (c >= '0' && c <= '9') {
-        return static_cast<std::uint8_t>(c - '0');
-    }
-    if (c >= 'A' && c <= 'F') {
-        return static_cast<std::uint8_t>(10 + c - 'A');
-    }
-    if (c >= 'a' && c <= 'f') {
-        return static_cast<std::uint8_t>(10 + c - 'a');
-    }
-    return 0;
-}
-
-/** Ровно 6 hex-цифр: `RRGGBB`, альфа в dword — `FF`. */
-bool PackD3dArgbFromRrggbb6(const char* digits, D3DCOLOR* outColor) {
-    if (outColor == nullptr) {
-        return false;
-    }
-    const std::uint32_t rr = (HexValue(digits[0]) << 4) | HexValue(digits[1]);
-    const std::uint32_t gg = (HexValue(digits[2]) << 4) | HexValue(digits[3]);
-    const std::uint32_t bb = (HexValue(digits[4]) << 4) | HexValue(digits[5]);
-    *outColor = (0xFFu << 24) | (rr << 16) | (gg << 8) | bb;
-    return true;
-}
-
-/** Ровно 8 hex-цифр: `AARRGGBB` (как dword D3DCOLOR). */
-bool PackD3dArgbFromAarrggbb8(const char* digits, D3DCOLOR* outColor) {
-    if (outColor == nullptr) {
-        return false;
-    }
-    const std::uint32_t aa = (HexValue(digits[0]) << 4) | HexValue(digits[1]);
-    const std::uint32_t rr = (HexValue(digits[2]) << 4) | HexValue(digits[3]);
-    const std::uint32_t gg = (HexValue(digits[4]) << 4) | HexValue(digits[5]);
-    const std::uint32_t bb = (HexValue(digits[6]) << 4) | HexValue(digits[7]);
-    *outColor = (aa << 24) | (rr << 16) | (gg << 8) | bb;
-    return true;
-}
-
-/** INI `ColorN`: только `{RRGGBB}`, `{AARRGGBB}` или десятичный signed D3DCOLOR ([Color list](https://sampwiki.blast.hk/wiki/Color_list)). */
-bool ParseOverlayColorString(const char* input, D3DCOLOR* outColor) {
-    if (input == nullptr || outColor == nullptr) {
-        return false;
-    }
-
-    const char* s = SkipSpaces(input);
-    if (*s == '\0') {
-        return false;
-    }
-
-    if (*s == '{') {
-        ++s;
-        std::size_t n = 0;
-        while (IsHexDigit(s[n])) {
-            ++n;
-        }
-        if (s[n] != '}' || (n != 6 && n != 8)) {
-            return false;
-        }
-        if (*SkipSpaces(s + n + 1) != '\0') {
-            return false;
-        }
-        if (n == 6) {
-            return PackD3dArgbFromRrggbb6(s, outColor);
-        }
-        return PackD3dArgbFromAarrggbb8(s, outColor);
-    }
-
-    char* end = nullptr;
-    const long v = std::strtol(s, &end, 10);
-    if (end == s || *SkipSpaces(end) != '\0') {
-        return false;
-    }
-    *outColor = static_cast<D3DCOLOR>(static_cast<std::int32_t>(v));
-    return true;
-}
-
-static char HexDigitUpper(std::uint8_t nibble) {
-    nibble &= 0x0Fu;
-    return static_cast<char>(nibble < 10 ? ('0' + nibble) : ('A' + (nibble - 10)));
-}
-
-void FormatCanonicalColorEmbedInto(char embed[9], D3DCOLOR canonicalArgb) {
-    const std::uint32_t u = static_cast<std::uint32_t>(canonicalArgb);
-    const std::uint8_t r = static_cast<std::uint8_t>((u >> 16) & 0xFFu);
-    const std::uint8_t g = static_cast<std::uint8_t>((u >> 8) & 0xFFu);
-    const std::uint8_t b = static_cast<std::uint8_t>(u & 0xFFu);
-    embed[0] = '{';
-    embed[1] = HexDigitUpper(static_cast<std::uint8_t>(r >> 4));
-    embed[2] = HexDigitUpper(r);
-    embed[3] = HexDigitUpper(static_cast<std::uint8_t>(g >> 4));
-    embed[4] = HexDigitUpper(g);
-    embed[5] = HexDigitUpper(static_cast<std::uint8_t>(b >> 4));
-    embed[6] = HexDigitUpper(b);
-    embed[7] = '}';
-    embed[8] = '\0';
-}
-
-bool AppendCStringTrunc(char* out, std::size_t cap, std::size_t& used, const char* s) {
-    if (out == nullptr || cap == 0 || s == nullptr) {
-        return false;
-    }
-    const std::size_t n = std::strlen(s);
-    if (used + n + 1 > cap) {
-        return false;
-    }
-    std::memcpy(out + used, s, n);
-    used += n;
-    out[used] = '\0';
-    return true;
-}
-
-bool AppendChar(char* out, std::size_t cap, std::size_t& used, char c) {
-    if (used + 2 > cap) {
-        return false;
-    }
-    out[used] = c;
-    ++used;
-    out[used] = '\0';
-    return true;
-}
-
-/** Вставка `{RRGGBB}`: при `maxLinePx>0` и симуляции разрыва токена — один `\n` перед ним, иначе без лишних переносов. */
-bool AppendOverlayBubbleColorEmbed(
-    char* out,
-    std::size_t cap,
-    std::size_t& used,
-    int maxLinePx,
-    int& linePx,
-    D3DCOLOR canonicalArgb) {
-    if (out == nullptr || cap == 0) {
-        return false;
-    }
-    char embed[9] = {};
-    FormatCanonicalColorEmbedInto(embed, canonicalArgb);
-    if (maxLinePx > 0 && OverlayBubbleMeasureEnsure()
-        && OverlayBubbleColorEmbedSplitsMidLine(maxLinePx, linePx, embed)) {
-        if (!AppendChar(out, cap, used, '\n')) {
-            return false;
-        }
-        linePx = 0;
-    }
-    if (used + 8 + 1 > cap) {
-        return false;
-    }
-    std::memcpy(out + used, embed, 8);
-    used += 8;
-    out[used] = '\0';
-    if (maxLinePx > 0 && OverlayBubbleMeasureEnsure()) {
-        OverlayBubbleAdvanceLineLayout(maxLinePx, linePx, embed, 8);
-    }
-    return true;
-}
-
-void TrimCopyRange(const char* begin, const char* endExclusive, char* dest, std::size_t destCap) {
-    if (dest == nullptr || destCap == 0) {
-        return;
-    }
-    const char* a = begin;
-    while (a < endExclusive && (*a == ' ' || *a == '\t')) {
-        ++a;
-    }
-    const char* b = endExclusive;
-    while (b > a && (b[-1] == ' ' || b[-1] == '\t')) {
-        --b;
-    }
-    const std::size_t n = static_cast<std::size_t>(b - a);
-    const std::size_t copyN = (n >= destCap) ? (destCap - 1) : n;
-    if (copyN > 0) {
-        std::memcpy(dest, a, copyN);
-    }
-    dest[copyN] = '\0';
-}
-
-void SplitRestIntoSegments(
-    const char* rest,
-    const char* splitSubstr,
-    char* seg0,
-    char* seg1,
-    std::size_t segCap) {
-    if (seg0 == nullptr || seg1 == nullptr || segCap == 0) {
-        return;
-    }
-    seg0[0] = '\0';
-    seg1[0] = '\0';
-    if (rest == nullptr) {
-        return;
-    }
-    if (splitSubstr == nullptr || splitSubstr[0] == '\0') {
-        TrimCopyRange(rest, rest + std::strlen(rest), seg0, segCap);
-        return;
-    }
-    const char* hit = std::strstr(rest, splitSubstr);
-    if (hit == nullptr) {
-        TrimCopyRange(rest, rest + std::strlen(rest), seg0, segCap);
-        return;
-    }
-    TrimCopyRange(rest, hit, seg0, segCap);
-    const char* after = hit + std::strlen(splitSubstr);
-    TrimCopyRange(after, after + std::strlen(after), seg1, segCap);
-}
-
-void BuildOverlayBubbleText(char* out, std::size_t cap, const OverlayCommandRule& rule, const char* rest) {
-    if (out == nullptr || cap == 0) {
-        return;
-    }
-    out[0] = '\0';
-    if (rest == nullptr) {
-        return;
-    }
-    if (rule.bubbleTemplate[0] == '\0') {
-        strncpy_s(out, cap, rest, _TRUNCATE);
-        return;
-    }
-
-    char seg0[kChatBubbleLineMax] = {};
-    char seg1[kChatBubbleLineMax] = {};
-    SplitRestIntoSegments(rest, rule.bubbleSplit, seg0, seg1, sizeof(seg0));
-
-    std::size_t used = 0;
-    int linePx = 0;
-    const int maxLine = g_state.overlayBubbleLinePx;
-    const D3DCOLOR c2 = rule.accentColorValid ? rule.accentColor : rule.color;
-
-    for (const char* p = rule.bubbleTemplate; *p != '\0';) {
-        if (p[0] == '{' && p[1] == '0' && p[2] == '}') {
-            if (!AppendCStringTrunc(out, cap, used, seg0)) {
-                return;
-            }
-            if (maxLine > 0 && OverlayBubbleMeasureEnsure()) {
-                OverlayBubbleAdvanceLineLayout(maxLine, linePx, seg0, std::strlen(seg0));
-            }
-            p += 3;
-            continue;
-        }
-        if (p[0] == '{' && p[1] == '1' && p[2] == '}') {
-            if (!AppendCStringTrunc(out, cap, used, seg1)) {
-                return;
-            }
-            if (maxLine > 0 && OverlayBubbleMeasureEnsure()) {
-                OverlayBubbleAdvanceLineLayout(maxLine, linePx, seg1, std::strlen(seg1));
-            }
-            p += 3;
-            continue;
-        }
-        if (p[0] == '{' && p[1] == 'c' && p[2] == '1' && p[3] == '}') {
-            if (!AppendOverlayBubbleColorEmbed(out, cap, used, maxLine, linePx, rule.color)) {
-                return;
-            }
-            p += 4;
-            continue;
-        }
-        if (p[0] == '{' && p[1] == 'c' && p[2] == '2' && p[3] == '}') {
-            if (!AppendOverlayBubbleColorEmbed(out, cap, used, maxLine, linePx, c2)) {
-                return;
-            }
-            p += 4;
-            continue;
-        }
-        if (!AppendChar(out, cap, used, *p)) {
-            return;
-        }
-        if (maxLine > 0 && OverlayBubbleMeasureEnsure()) {
-            if (*p == '\n') {
-                linePx = 0;
-            } else {
-                OverlayBubbleAdvanceLineLayout(maxLine, linePx, p, 1);
-            }
-        }
-        ++p;
-    }
 }
 
 template <typename T>
@@ -762,386 +294,6 @@ std::uint16_t GetLocalPlayerId(void* playerPool) {
         reinterpret_cast<const std::uint8_t*>(playerPool) + g_state.version->localPlayerIdOffset);
 }
 
-/** Исключает NULL и «мелкие» значения (ID/счётчики вроде 0xF00), ошибочно читаемые как указатель в `CChatBubble::Draw`. */
-static bool LikelyHeapDataPointer(const void* p) {
-    const auto u = reinterpret_cast<std::uintptr_t>(p);
-    return u >= 0x00010000u && u <= 0x7FFEFFFFu;
-}
-
-extern "C" void* __cdecl ResolveChatBubbleLocalPed(unsigned short slot) {
-    if (g_state.version == nullptr || g_state.sampBase == 0) {
-        return nullptr;
-    }
-
-    void* const netGame = ReadGlobalObject<void>(g_state.version->refNetGameOffset);
-    if (netGame == nullptr) {
-        return nullptr;
-    }
-
-    void* const pool = CallThis<void*>(netGame, g_state.version->getPlayerPoolOffset);
-    if (pool == nullptr) {
-        return nullptr;
-    }
-
-    if (slot != GetLocalPlayerId(pool)) {
-        return nullptr;
-    }
-
-    void* const localPlayer = CallThis<void*>(pool, g_state.version->getLocalPlayerOffset);
-    if (localPlayer == nullptr) {
-        return nullptr;
-    }
-
-    __try {
-        void* const ped = *reinterpret_cast<void**>(
-            reinterpret_cast<std::uint8_t*>(localPlayer) + g_state.version->localPedOffset);
-        if (!LikelyHeapDataPointer(ped)) {
-            return nullptr;
-        }
-        return ped;
-    } __except (EXCEPTION_EXECUTE_HANDLER) {
-        return nullptr;
-    }
-}
-
-/** `EcxLeaJe11`: remote-player chain under SEH; bad chain is treated like the original slot skip. */
-extern "C" int __cdecl ChatBubbleLea11RowChainOk(const void* leaSlotBase) {
-    if (leaSlotBase == nullptr || g_state.version == nullptr) {
-        return 0;
-    }
-    __try {
-        const auto* const b = static_cast<const std::uint8_t*>(leaSlotBase);
-        const void* r = nullptr;
-        const void* r2 = nullptr;
-        switch (g_state.version->version) {
-            case SampVersion::R2: {
-                r = *reinterpret_cast<const void* const*>(b + 0x26);
-                if (!LikelyHeapDataPointer(r)) {
-                    return 0;
-                }
-                r2 = *reinterpret_cast<const void* const*>(static_cast<const std::uint8_t*>(r) + 0x0c);
-                if (!LikelyHeapDataPointer(r2)) {
-                    return 0;
-                }
-                (void)*reinterpret_cast<const volatile std::uint32_t*>(
-                    static_cast<const std::uint8_t*>(r2) + 0x1c);
-                (void)*reinterpret_cast<const volatile std::uint8_t*>(
-                    static_cast<const std::uint8_t*>(r2) + 0x12);
-                return 1;
-            }
-            case SampVersion::R4: {
-                r = *reinterpret_cast<const void* const*>(b + 0x2e);
-                if (!LikelyHeapDataPointer(r)) {
-                    return 0;
-                }
-                r2 = *reinterpret_cast<const void* const*>(static_cast<const std::uint8_t*>(r) + 0x10);
-                if (!LikelyHeapDataPointer(r2)) {
-                    return 0;
-                }
-                (void)*reinterpret_cast<const volatile std::uint32_t*>(
-                    static_cast<const std::uint8_t*>(r2) + 0x1dd);
-                (void)*reinterpret_cast<const volatile std::uint8_t*>(
-                    static_cast<const std::uint8_t*>(r2) + 0x10a);
-                return 1;
-            }
-            case SampVersion::R4_2:
-            case SampVersion::R5_1: {
-                r = *reinterpret_cast<const void* const*>(b + 0x1f8a);
-                if (!LikelyHeapDataPointer(r)) {
-                    return 0;
-                }
-                r2 = *reinterpret_cast<const void* const*>(static_cast<const std::uint8_t*>(r) + 0x10);
-                if (!LikelyHeapDataPointer(r2)) {
-                    return 0;
-                }
-                (void)*reinterpret_cast<const volatile std::uint32_t*>(
-                    static_cast<const std::uint8_t*>(r2) + 0x1dd);
-                (void)*reinterpret_cast<const volatile std::uint8_t*>(
-                    static_cast<const std::uint8_t*>(r2) + 0x10a);
-                return 1;
-            }
-            case SampVersion::DL_R1: {
-                r = *reinterpret_cast<const void* const*>(b + 0x26);
-                if (!LikelyHeapDataPointer(r)) {
-                    return 0;
-                }
-                r2 = *reinterpret_cast<const void* const*>(static_cast<const std::uint8_t*>(r) + 8);
-                if (!LikelyHeapDataPointer(r2)) {
-                    return 0;
-                }
-                const void* const ped =
-                    *reinterpret_cast<const void* const*>(static_cast<const std::uint8_t*>(r2) + 4);
-                if (!LikelyHeapDataPointer(ped)) {
-                    return 0;
-                }
-                (void)*reinterpret_cast<const volatile std::uint8_t*>(
-                    static_cast<const std::uint8_t*>(r2) + 0x1a);
-                return 1;
-            }
-            default:
-                return 1;
-        }
-    } __except (EXCEPTION_EXECUTE_HANDLER) {
-        return 0;
-    }
-}
-
-extern "C" int __cdecl ChatBubbleCanReadLikelyPointerAt(const void* base, unsigned int offset) {
-    if (!LikelyHeapDataPointer(base) || offset > 0x2000u) {
-        return 0;
-    }
-
-    __try {
-        const void* const value =
-            *reinterpret_cast<const void* const*>(static_cast<const std::uint8_t*>(base) + offset);
-        return LikelyHeapDataPointer(value) ? 1 : 0;
-    } __except (EXCEPTION_EXECUTE_HANDLER) {
-        return 0;
-    }
-}
-
-extern "C" int __cdecl ChatBubbleR1RowChainOk(const void* rowBase) {
-    if (!LikelyHeapDataPointer(rowBase)) {
-        return 0;
-    }
-
-    __try {
-        const auto* const row = static_cast<const std::uint8_t*>(rowBase);
-        const void* const pedSlot = *reinterpret_cast<const void* const*>(row + 0x2e);
-        if (!LikelyHeapDataPointer(pedSlot)) {
-            return 0;
-        }
-
-        const void* const ped = *reinterpret_cast<const void* const*>(pedSlot);
-        if (!LikelyHeapDataPointer(ped)) {
-            return 0;
-        }
-
-        const void* const vtable = *reinterpret_cast<const void* const*>(ped);
-        if (!LikelyHeapDataPointer(vtable)) {
-            return 0;
-        }
-
-        return (*reinterpret_cast<const volatile std::uint8_t*>(
-            static_cast<const std::uint8_t*>(ped) + 0x09) != 0) ? 1 : 0;
-    } __except (EXCEPTION_EXECUTE_HANDLER) {
-        return 0;
-    }
-}
-
-extern "C" int __cdecl ChatBubbleR3RowChainOk(const void* poolBase, unsigned int slot) {
-    if (!LikelyHeapDataPointer(poolBase) || slot >= 1004u) {
-        return 0;
-    }
-
-    __try {
-        const auto* const pool = static_cast<const std::uint8_t*>(poolBase);
-        const void* const pedSlot =
-            *reinterpret_cast<const void* const*>(pool + (slot * 4u) + 0x04);
-        if (!LikelyHeapDataPointer(pedSlot)) {
-            return 0;
-        }
-
-        const void* const ped = *reinterpret_cast<const void* const*>(pedSlot);
-        if (!LikelyHeapDataPointer(ped)) {
-            return 0;
-        }
-
-        const void* const vtable = *reinterpret_cast<const void* const*>(ped);
-        if (!LikelyHeapDataPointer(vtable)) {
-            return 0;
-        }
-
-        return (*reinterpret_cast<const volatile std::uint8_t*>(
-            static_cast<const std::uint8_t*>(ped) + 0x10a) != 0) ? 1 : 0;
-    } __except (EXCEPTION_EXECUTE_HANDLER) {
-        return 0;
-    }
-}
-
-extern "C" __declspec(naked) void ChatBubbleRemoteChainLoadGuardTrampoline() {
-    __asm {
-        push ecx
-        push edx
-        push eax
-        push 8
-        push eax
-        call ChatBubbleCanReadLikelyPointerAt
-        add esp, 8
-        test eax, eax
-        pop eax
-        pop edx
-        pop ecx
-        je L_skip
-        mov eax, dword ptr [eax + 8]
-        jmp dword ptr [g_chatBubbleRemoteChainLoadResume]
-L_skip:
-        jmp dword ptr [g_chatBubblePoolSkip]
-    }
-}
-
-extern "C" __declspec(naked) void ChatBubbleRemoteChainPedGuardTrampoline() {
-    __asm {
-        push edx
-        push eax
-        push 4
-        push eax
-        call ChatBubbleCanReadLikelyPointerAt
-        add esp, 8
-        test eax, eax
-        pop eax
-        pop edx
-        je L_skip
-        mov ecx, dword ptr [eax + 4]
-        test ecx, ecx
-        jmp dword ptr [g_chatBubbleRemoteChainPedResume]
-L_skip:
-        jmp dword ptr [g_chatBubblePoolSkip]
-    }
-}
-
-extern "C" __declspec(naked) void ChatBubblePoolNullTrampoline_EcxJe8() {
-    __asm {
-        push eax
-        push ecx
-        push edx
-        push esi
-        push edi
-        movzx eax, bp
-        push eax
-        call ResolveChatBubbleLocalPed
-        add esp, 4
-        test eax, eax
-        je L_restore_original
-        add esp, 8
-        mov edi, eax
-        pop edx
-        pop ecx
-        pop eax
-        jmp dword ptr [g_chatBubblePoolResumeMid]
-L_restore_original:
-        pop edi
-        pop esi
-        pop edx
-        pop ecx
-        pop eax
-        test ecx, ecx
-        jnz L_validate_row
-        jmp dword ptr [g_chatBubblePoolSkip]
-L_validate_row:
-        push eax
-        push ecx
-        push edx
-        push esi
-        push edi
-        push eax
-        call ChatBubbleR1RowChainOk
-        add esp, 4
-        test eax, eax
-        pop edi
-        pop esi
-        pop edx
-        pop ecx
-        pop eax
-        je L_skip_row
-        jmp dword ptr [g_chatBubblePoolResume]
-L_skip_row:
-        jmp dword ptr [g_chatBubblePoolSkip]
-    }
-}
-
-extern "C" __declspec(naked) void ChatBubblePoolNullTrampoline_EdxJe8() {
-    __asm {
-        push eax
-        push ecx
-        push edx
-        push esi
-        push edi
-        movzx eax, bp
-        push eax
-        call ResolveChatBubbleLocalPed
-        add esp, 4
-        test eax, eax
-        je L_restore_original
-        add esp, 8
-        mov esi, eax
-        pop edx
-        pop ecx
-        pop eax
-        jmp dword ptr [g_chatBubblePoolResumeMid]
-L_restore_original:
-        pop edi
-        pop esi
-        pop edx
-        pop ecx
-        pop eax
-        test edx, edx
-        jnz L_validate_edx
-        jmp dword ptr [g_chatBubblePoolSkip]
-L_validate_edx:
-        push eax
-        push ecx
-        push edx
-        push esi
-        push edi
-        push eax
-        push ecx
-        call ChatBubbleR3RowChainOk
-        add esp, 8
-        test eax, eax
-        pop edi
-        pop esi
-        pop edx
-        pop ecx
-        pop eax
-        je L_skip_edx
-        jmp dword ptr [g_chatBubblePoolResume]
-L_skip_edx:
-        jmp dword ptr [g_chatBubblePoolSkip]
-    }
-}
-
-extern "C" __declspec(naked) void ChatBubblePoolNullTrampoline_EcxLeaJe11() {
-    __asm {
-        push ecx
-        push edx
-        push esi
-        push edi
-        movzx eax, bp
-        push eax
-        call ResolveChatBubbleLocalPed
-        add esp, 4
-        test eax, eax
-        je L_restore_original
-        add esp, 8
-        mov edi, eax
-        pop edx
-        pop ecx
-        jmp dword ptr [g_chatBubblePoolResumeMid]
-L_restore_original:
-        pop edi
-        pop esi
-        pop edx
-        pop ecx
-        test ecx, ecx
-        jnz L_nonempty_pool
-        jmp dword ptr [g_chatBubblePoolSkip]
-L_nonempty_pool:
-        push edx
-        lea eax, [edi + edx * 4]
-        push eax
-        call ChatBubbleLea11RowChainOk
-        add esp, 4
-        pop edx
-        test eax, eax
-        je L_nonempty_pool_chain_bad
-        lea eax, [edi + edx * 4]
-        jmp dword ptr [g_chatBubblePoolResume]
-L_nonempty_pool_chain_bad:
-        jmp dword ptr [g_chatBubblePoolSkip]
-    }
-}
-
 struct LocalDrawContext {
     void* playerTags = nullptr;
     void* localPlayer = nullptr;
@@ -1227,46 +379,21 @@ bool BuildLocalDrawContext(LocalDrawContext& context) {
     return true;
 }
 
-bool WantChatBubbleLocalDrawPatches() {
-    return g_state.mirrorOwnChatBubble || g_state.overlayRuleCount > 0;
+chat_bubble::LocalPlayerContext ToChatBubbleContext(const LocalDrawContext& context) {
+    chat_bubble::LocalPlayerContext result{};
+    result.localPlayer = context.localPlayer;
+    result.id = context.id;
+    result.distanceToCamera = context.distanceToCamera;
+    return result;
 }
 
-/** Канонический AARRGGBB (как у `DrawLabel` / wiki) → dword для `CChatBubble::Add`: иначе {FF90FF} рисуется как FFFF90. */
-D3DCOLOR ChatBubbleAddColorFromCanonicalArgb(D3DCOLOR canonical) {
-    const std::uint32_t u = static_cast<std::uint32_t>(canonical);
-    const std::uint32_t a = (u >> 24) & 0xFFu;
-    const std::uint32_t r = (u >> 16) & 0xFFu;
-    const std::uint32_t g = (u >> 8) & 0xFFu;
-    const std::uint32_t b = u & 0xFFu;
-    return static_cast<D3DCOLOR>((a << 24) | (g << 16) | (b << 8) | r);
-}
-
-void PushLocalPlayerChatBubble(
-    const LocalDrawContext& context, const char* text, D3DCOLOR color, int lifeMs) {
-    if (g_state.version == nullptr || context.id >= 1004u) {
-        return;
+bool BuildLocalChatBubbleContext(chat_bubble::LocalPlayerContext& context) {
+    LocalDrawContext drawContext{};
+    if (!BuildLocalDrawContext(drawContext)) {
+        return false;
     }
-
-    void* const bubble = ReadGlobalObject<void>(g_state.version->refChatBubbleOffset);
-    if (bubble == nullptr) {
-        return;
-    }
-
-    char line[kChatBubbleLineMax] = {};
-    if (text != nullptr) {
-        strncpy_s(line, sizeof(line), text, _TRUNCATE);
-    }
-
-    const D3DCOLOR addColor = ChatBubbleAddColorFromCanonicalArgb(color);
-
-    CallThis<void>(
-        bubble,
-        g_state.version->chatBubbleAddOffset,
-        static_cast<unsigned int>(context.id),
-        line,
-        addColor,
-        context.distanceToCamera,
-        lifeMs);
+    context = ToChatBubbleContext(drawContext);
+    return true;
 }
 
 void __fastcall SendCommandDetour(void* thisPtr, void* /*edx*/, const char* text) {
@@ -1277,7 +404,7 @@ void __fastcall SendCommandDetour(void* thisPtr, void* /*edx*/, const char* text
 
     if (text != nullptr && g_state.overlayRuleCount > 0) {
         for (unsigned int i = 0; i < g_state.overlayRuleCount; ++i) {
-            const OverlayCommandRule& rule = g_state.overlayRules[i];
+            const chat_bubble::OverlayCommandRule& rule = g_state.overlayRules[i];
             if (rule.cmd[0] == '\0') {
                 continue;
             }
@@ -1298,13 +425,14 @@ void __fastcall SendCommandDetour(void* thisPtr, void* /*edx*/, const char* text
             }
 
             if (ctxOk) {
+                const chat_bubble::LocalPlayerContext bubbleContext = ToChatBubbleContext(bubbleCtx);
                 if (*rest == '\0') {
-                    PushLocalPlayerChatBubble(bubbleCtx, "", rule.color, 1);
+                    chat_bubble::PushLocalPlayerBubble(bubbleContext, "", rule.color, 1);
                 } else {
-                    char bubbleText[kChatBubbleLineMax] = {};
-                    BuildOverlayBubbleText(bubbleText, sizeof(bubbleText), rule, rest);
-                    PushLocalPlayerChatBubble(
-                        bubbleCtx, bubbleText, rule.color, g_state.chatBubbleLifeMs);
+                    char bubbleText[chat_bubble::kLineMax] = {};
+                    chat_bubble::BuildOverlayText(bubbleText, sizeof(bubbleText), rule, rest);
+                    chat_bubble::PushLocalPlayerBubble(
+                        bubbleContext, bubbleText, rule.color, g_state.chatBubbleLifeMs);
                 }
             }
             return;
@@ -1314,212 +442,6 @@ void __fastcall SendCommandDetour(void* thisPtr, void* /*edx*/, const char* text
     if (g_originalSendCommand) {
         g_originalSendCommand(thisPtr, text);
     }
-}
-
-bool LooksLikeNearJeSkip(const void* address) {
-    const auto* bytes = static_cast<const std::uint8_t*>(address);
-    return bytes[0] == 0x0F && bytes[1] == 0x84;
-}
-
-bool LooksLikeChatBubblePoolNullEcxJe8(const void* address) {
-    const auto* bytes = static_cast<const std::uint8_t*>(address);
-    return bytes[0] == 0x85 && bytes[1] == 0xC9 && bytes[2] == 0x0F && bytes[3] == 0x84;
-}
-
-bool LooksLikeChatBubblePoolNullEdxJe8(const void* address) {
-    const auto* bytes = static_cast<const std::uint8_t*>(address);
-    return bytes[0] == 0x85 && bytes[1] == 0xD2 && bytes[2] == 0x0F && bytes[3] == 0x84;
-}
-
-bool LooksLikeChatBubblePoolNullEcxLeaJe11(const void* address) {
-    const auto* bytes = static_cast<const std::uint8_t*>(address);
-    return bytes[0] == 0x85 && bytes[1] == 0xC9 && bytes[2] == 0x8D && bytes[3] == 0x04 && bytes[4] == 0x97
-        && bytes[5] == 0x0F && bytes[6] == 0x84;
-}
-
-bool LooksLikeChatBubbleRemoteChainLoad(const void* address) {
-    const auto* bytes = static_cast<const std::uint8_t*>(address);
-    return bytes[0] == 0x8B && bytes[1] == 0x40 && bytes[2] == 0x08 && bytes[3] == 0xEB
-        && bytes[4] == 0x02;
-}
-
-bool LooksLikeChatBubbleRemoteChainPed(const void* address) {
-    const auto* bytes = static_cast<const std::uint8_t*>(address);
-    return bytes[0] == 0x8B && bytes[1] == 0x48 && bytes[2] == 0x04 && bytes[3] == 0x85
-        && bytes[4] == 0xC9;
-}
-
-bool ApplyChatBubblePoolNullTrampoline() {
-    if (g_state.version == nullptr || g_state.sampBase == 0) {
-        return true;
-    }
-
-    const std::uint8_t kind = g_state.version->chatBubblePoolNullTrampKind;
-    const std::uint32_t patchRva = g_state.version->chatBubblePoolNullTrampPatchRva;
-    if (kind == kChatBubblePoolTrampNone || patchRva == 0) {
-        return true;
-    }
-
-    const std::size_t patchBytes = (kind == kChatBubblePoolTrampEcxLeaJe11)
-        ? kChatBubblePoolNullTrampPatchBytesMax
-        : 8u;
-    void* const patchAt = reinterpret_cast<void*>(g_state.sampBase + patchRva);
-
-    bool signatureOk = false;
-    if (kind == kChatBubblePoolTrampEcxJe8) {
-        signatureOk = LooksLikeChatBubblePoolNullEcxJe8(patchAt);
-    } else if (kind == kChatBubblePoolTrampEdxJe8) {
-        signatureOk = LooksLikeChatBubblePoolNullEdxJe8(patchAt);
-    } else if (kind == kChatBubblePoolTrampEcxLeaJe11) {
-        signatureOk = LooksLikeChatBubblePoolNullEcxLeaJe11(patchAt);
-    }
-    if (!signatureOk) {
-        return false;
-    }
-
-    g_chatBubblePoolResume = reinterpret_cast<void*>(
-        g_state.sampBase + g_state.version->chatBubblePoolNullTrampResumeRva);
-    if (g_state.version->chatBubblePoolNullTrampResumeMidRva != 0) {
-        g_chatBubblePoolResumeMid = reinterpret_cast<void*>(
-            g_state.sampBase + g_state.version->chatBubblePoolNullTrampResumeMidRva);
-    } else {
-        g_chatBubblePoolResumeMid = nullptr;
-    }
-    g_chatBubblePoolSkip =
-        reinterpret_cast<void*>(g_state.sampBase + g_state.version->chatBubblePoolNullTrampSkipRva);
-
-    if (g_chatBubblePoolResumeMid == nullptr) {
-        return false;
-    }
-
-    const void* trampEntry = nullptr;
-    if (kind == kChatBubblePoolTrampEcxJe8) {
-        trampEntry = reinterpret_cast<const void*>(&ChatBubblePoolNullTrampoline_EcxJe8);
-    } else if (kind == kChatBubblePoolTrampEdxJe8) {
-        trampEntry = reinterpret_cast<const void*>(&ChatBubblePoolNullTrampoline_EdxJe8);
-    } else {
-        trampEntry = reinterpret_cast<const void*>(&ChatBubblePoolNullTrampoline_EcxLeaJe11);
-    }
-
-    std::memcpy(g_chatBubblePoolEarlyOrig, patchAt, patchBytes);
-
-    std::uint8_t patchBuf[kChatBubblePoolNullTrampPatchBytesMax]{};
-    if (!BuildJumpPatch(patchBuf, patchBytes, patchAt, trampEntry)) {
-        return false;
-    }
-
-    if (!WriteBytes(patchAt, patchBuf, patchBytes)) {
-        return false;
-    }
-
-    return true;
-}
-
-bool ApplyChatBubbleRemoteChainGuards() {
-    if (g_state.version == nullptr || g_state.sampBase == 0) {
-        return false;
-    }
-
-    const std::uint32_t loadRva = g_state.version->chatBubbleRemoteChainLoadGuardRva;
-    const std::uint32_t pedRva = g_state.version->chatBubbleRemoteChainPedGuardRva;
-    if (loadRva == 0 && pedRva == 0) {
-        return true;
-    }
-    if (loadRva == 0 || pedRva == 0 || g_chatBubblePoolSkip == nullptr) {
-        return false;
-    }
-
-    void* const loadAt = reinterpret_cast<void*>(g_state.sampBase + loadRva);
-    void* const pedAt = reinterpret_cast<void*>(g_state.sampBase + pedRva);
-    if (!LooksLikeChatBubbleRemoteChainLoad(loadAt) || !LooksLikeChatBubbleRemoteChainPed(pedAt)) {
-        return false;
-    }
-
-    g_chatBubbleRemoteChainLoadResume = pedAt;
-    g_chatBubbleRemoteChainPedResume =
-        reinterpret_cast<void*>(g_state.sampBase + pedRva + kChatBubbleRemoteChainGuardPatchBytes);
-
-    std::memcpy(g_chatBubbleRemoteChainLoadOrig, loadAt, kChatBubbleRemoteChainGuardPatchBytes);
-    std::memcpy(g_chatBubbleRemoteChainPedOrig, pedAt, kChatBubbleRemoteChainGuardPatchBytes);
-
-    std::uint8_t loadPatch[kChatBubbleRemoteChainGuardPatchBytes]{};
-    std::uint8_t pedPatch[kChatBubbleRemoteChainGuardPatchBytes]{};
-    if (!BuildJumpPatch(
-            loadPatch,
-            sizeof(loadPatch),
-            loadAt,
-            reinterpret_cast<const void*>(&ChatBubbleRemoteChainLoadGuardTrampoline))) {
-        return false;
-    }
-    if (!BuildJumpPatch(
-            pedPatch,
-            sizeof(pedPatch),
-            pedAt,
-            reinterpret_cast<const void*>(&ChatBubbleRemoteChainPedGuardTrampoline))) {
-        return false;
-    }
-
-    if (!WriteBytes(loadAt, loadPatch, sizeof(loadPatch))) {
-        return false;
-    }
-    if (!WriteBytes(pedAt, pedPatch, sizeof(pedPatch))) {
-        return false;
-    }
-
-    return true;
-}
-
-bool ApplyChatBubbleLocalDrawBypass() {
-    if (g_state.version == nullptr || g_state.sampBase == 0) {
-        return false;
-    }
-    if (g_state.version->chatBubbleLocalSkipJeRva == 0) {
-        return false;
-    }
-    void* const patchAt =
-        reinterpret_cast<void*>(g_state.sampBase + g_state.version->chatBubbleLocalSkipJeRva);
-    if (!LooksLikeNearJeSkip(patchAt)) {
-        return false;
-    }
-
-    std::memcpy(g_chatBubbleJeOrig, patchAt, kChatBubbleLocalSkipJePatchBytes);
-    static constexpr std::uint8_t kNops[kChatBubbleLocalSkipJePatchBytes] = {
-        0x90, 0x90, 0x90, 0x90, 0x90, 0x90};
-    if (!WriteBytes(patchAt, kNops, sizeof(kNops))) {
-        return false;
-    }
-    return true;
-}
-
-void __fastcall LocalPlayerChatDetour(void* thisPtr, void* /*edx*/, const char* text) {
-    if (g_originalLocalPlayerChat != nullptr) {
-        g_originalLocalPlayerChat(thisPtr, text);
-    }
-
-    if (!g_state.mirrorOwnChatBubble) {
-        return;
-    }
-    if (text == nullptr || text[0] == '\0') {
-        return;
-    }
-    if (text[0] == '/') {
-        return;
-    }
-
-    LocalDrawContext context{};
-    if (!BuildLocalDrawContext(context)) {
-        return;
-    }
-
-    if (thisPtr != context.localPlayer) {
-        return;
-    }
-
-    if (context.id >= 1004u) {
-        return;
-    }
-
-    PushLocalPlayerChatBubble(context, text, kFallbackLabelColor, g_state.chatBubbleLifeMs);
 }
 
 void DrawLocalLabel() {
@@ -1586,14 +508,17 @@ bool InstallHooks() {
         return false;
     }
 
-    if (WantChatBubbleLocalDrawPatches()) {
-        if (!ApplyChatBubblePoolNullTrampoline()) {
-            return false;
-        }
-        if (!ApplyChatBubbleRemoteChainGuards()) {
-            return false;
-        }
-        if (!ApplyChatBubbleLocalDrawBypass()) {
+    chat_bubble::RuntimeConfig bubbleConfig{};
+    bubbleConfig.sampBase = g_state.sampBase;
+    bubbleConfig.version = g_state.version;
+    bubbleConfig.mirrorOwnChatBubble = g_state.mirrorOwnChatBubble;
+    bubbleConfig.lifeMs = g_state.chatBubbleLifeMs;
+    bubbleConfig.overlayLinePx = g_state.overlayBubbleLinePx;
+    bubbleConfig.buildLocalContext = &BuildLocalChatBubbleContext;
+    chat_bubble::Configure(bubbleConfig);
+
+    if (chat_bubble::WantLocalDrawPatches(g_state.mirrorOwnChatBubble, g_state.overlayRuleCount)) {
+        if (!chat_bubble::InstallLocalDrawPatches()) {
             return false;
         }
     }
@@ -1622,19 +547,8 @@ bool InstallHooks() {
         return false;
     }
 
-    if (g_state.mirrorOwnChatBubble && g_state.version->localPlayerChatOffset != 0) {
-        void* chatTarget =
-            reinterpret_cast<void*>(g_state.sampBase + g_state.version->localPlayerChatOffset);
-        const MH_STATUS sc1 = MH_CreateHook(
-            chatTarget,
-            reinterpret_cast<void*>(&LocalPlayerChatDetour),
-            reinterpret_cast<void**>(&g_originalLocalPlayerChat));
-        if (sc1 != MH_OK) {
-            return false;
-        }
-        if (MH_EnableHook(chatTarget) != MH_OK) {
-            return false;
-        }
+    if (!chat_bubble::InstallLocalPlayerChatHook()) {
+        return false;
     }
 
     return true;
@@ -1649,8 +563,8 @@ void LoadOverlayCommands(const char* iniPath) {
         return;
     }
     unsigned int n = static_cast<unsigned int>(count);
-    if (n > kOverlayMaxRules) {
-        n = kOverlayMaxRules;
+    if (n > chat_bubble::kOverlayMaxRules) {
+        n = chat_bubble::kOverlayMaxRules;
     }
 
     for (unsigned int i = 1; i <= n; ++i) {
@@ -1667,7 +581,7 @@ void LoadOverlayCommands(const char* iniPath) {
         _snprintf_s(keySplit, _TRUNCATE, "BubbleSplit%u", i);
         _snprintf_s(keyAccent, _TRUNCATE, "AccentColor%u", i);
 
-        OverlayCommandRule rule{};
+        chat_bubble::OverlayCommandRule rule{};
         GetPrivateProfileStringA(kOverlaySection, keyCmd, "", rule.cmd, static_cast<DWORD>(sizeof(rule.cmd)), iniPath);
         if (rule.cmd[0] == '\0') {
             continue;
@@ -1676,7 +590,7 @@ void LoadOverlayCommands(const char* iniPath) {
         char colorBuf[96] = {};
         GetPrivateProfileStringA(
             kOverlaySection, keyColor, "", colorBuf, static_cast<DWORD>(sizeof(colorBuf)), iniPath);
-        if (!ParseOverlayColorString(colorBuf, &rule.color)) {
+        if (!chat_bubble::ParseColorString(colorBuf, &rule.color)) {
             rule.color = kFallbackLabelColor;
         }
 
@@ -1701,7 +615,7 @@ void LoadOverlayCommands(const char* iniPath) {
         char accentBuf[96] = {};
         GetPrivateProfileStringA(
             kOverlaySection, keyAccent, "", accentBuf, static_cast<DWORD>(sizeof(accentBuf)), iniPath);
-        if (accentBuf[0] != '\0' && ParseOverlayColorString(accentBuf, &rule.accentColor)) {
+        if (accentBuf[0] != '\0' && chat_bubble::ParseColorString(accentBuf, &rule.accentColor)) {
             rule.accentColorValid = true;
         }
 
@@ -1855,7 +769,7 @@ void LoadConfig() {
     g_state.mirrorOwnChatBubble = (mirror != 0);
 
     int life = GetPrivateProfileIntA(
-        kConfigSection, kConfigKeyChatBubbleLifeMs, kDefaultChatBubbleLifeMs, iniPath);
+        kConfigSection, kConfigKeyChatBubbleLifeMs, chat_bubble::kDefaultLifeMs, iniPath);
     if (life < 500) {
         life = 500;
     }
@@ -1864,7 +778,7 @@ void LoadConfig() {
     }
     g_state.chatBubbleLifeMs = life;
 
-    LoadOverlayBubbleLinePxFromIni(iniPath, kDefaultOverlayBubbleLinePx);
+    LoadOverlayBubbleLinePxFromIni(iniPath, chat_bubble::kDefaultOverlayLinePx);
 
     LoadOverlayCommands(iniPath);
 
@@ -1927,7 +841,7 @@ BOOL APIENTRY DllMain(HMODULE module, DWORD reason, LPVOID) {
             CloseHandle(thread);
         }
     } else if (reason == DLL_PROCESS_DETACH) {
-        OverlayBubbleMeasureShutdown();
+        chat_bubble::Shutdown();
     }
 
     return TRUE;
