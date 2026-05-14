@@ -39,6 +39,8 @@ struct RuntimeConfig {
     bool mirrorOwnChatBubble = false;
     int lifeMs = kDefaultLifeMs;
     int overlayLinePx = kDefaultOverlayLinePx;
+    /** Цвет текста зеркала исходящего чата без ведущего `/` (не оверлей-команды). */
+    D3DCOLOR ownChatBubbleColor = 0xFFFFFFFFu;
     BuildLocalContextFn buildLocalContext = nullptr;
 };
 

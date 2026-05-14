@@ -18,7 +18,6 @@ extern "C" void ChatBubblePoolNullTrampoline_EcxLeaJe11();
 
 namespace {
 
-constexpr D3DCOLOR kFallbackColor = 0xFFFFFFFFu;
 constexpr std::size_t kLocalSkipJePatchBytes = 6;
 constexpr std::size_t kPoolNullTrampPatchBytesMax = 11;
 constexpr std::size_t kRemoteChainGuardPatchBytes = 5;
@@ -161,26 +160,27 @@ std::uint8_t HexValue(char c) {
     return 0;
 }
 
-bool PackD3dArgbFromRrggbb6(const char* digits, D3DCOLOR* outColor) {
+/** Упаковка **RRGGBBAA** в `D3DCOLOR`, как ожидает аргумент `CChatBubble::Add` (samp: `(arg>>8)|0xFF000000` → AARRGGBB для Draw). */
+bool PackD3dRrggbbaaFromRrggbb6(const char* digits, D3DCOLOR* outColor) {
     if (outColor == nullptr) {
         return false;
     }
     const std::uint32_t rr = (HexValue(digits[0]) << 4) | HexValue(digits[1]);
     const std::uint32_t gg = (HexValue(digits[2]) << 4) | HexValue(digits[3]);
     const std::uint32_t bb = (HexValue(digits[4]) << 4) | HexValue(digits[5]);
-    *outColor = (0xFFu << 24) | (rr << 16) | (gg << 8) | bb;
+    *outColor = (rr << 24) | (gg << 16) | (bb << 8) | 0xFFu;
     return true;
 }
 
-bool PackD3dArgbFromAarrggbb8(const char* digits, D3DCOLOR* outColor) {
+bool PackD3dRrggbbaaFromRrggbbaa8(const char* digits, D3DCOLOR* outColor) {
     if (outColor == nullptr) {
         return false;
     }
-    const std::uint32_t aa = (HexValue(digits[0]) << 4) | HexValue(digits[1]);
-    const std::uint32_t rr = (HexValue(digits[2]) << 4) | HexValue(digits[3]);
-    const std::uint32_t gg = (HexValue(digits[4]) << 4) | HexValue(digits[5]);
-    const std::uint32_t bb = (HexValue(digits[6]) << 4) | HexValue(digits[7]);
-    *outColor = (aa << 24) | (rr << 16) | (gg << 8) | bb;
+    const std::uint32_t rr = (HexValue(digits[0]) << 4) | HexValue(digits[1]);
+    const std::uint32_t gg = (HexValue(digits[2]) << 4) | HexValue(digits[3]);
+    const std::uint32_t bb = (HexValue(digits[4]) << 4) | HexValue(digits[5]);
+    const std::uint32_t aa = (HexValue(digits[6]) << 4) | HexValue(digits[7]);
+    *outColor = (rr << 24) | (gg << 16) | (bb << 8) | aa;
     return true;
 }
 
@@ -189,11 +189,11 @@ char HexDigitUpper(std::uint8_t nibble) {
     return static_cast<char>(nibble < 10 ? ('0' + nibble) : ('A' + (nibble - 10)));
 }
 
-void FormatCanonicalColorEmbedInto(char embed[9], D3DCOLOR canonicalArgb) {
-    const std::uint32_t u = static_cast<std::uint32_t>(canonicalArgb);
-    const std::uint8_t r = static_cast<std::uint8_t>((u >> 16) & 0xFFu);
-    const std::uint8_t g = static_cast<std::uint8_t>((u >> 8) & 0xFFu);
-    const std::uint8_t b = static_cast<std::uint8_t>(u & 0xFFu);
+void FormatCanonicalColorEmbedInto(char embed[9], D3DCOLOR rrggbbaa) {
+    const std::uint32_t u = static_cast<std::uint32_t>(rrggbbaa);
+    const std::uint8_t r = static_cast<std::uint8_t>((u >> 24) & 0xFFu);
+    const std::uint8_t g = static_cast<std::uint8_t>((u >> 16) & 0xFFu);
+    const std::uint8_t b = static_cast<std::uint8_t>((u >> 8) & 0xFFu);
     embed[0] = '{';
     embed[1] = HexDigitUpper(static_cast<std::uint8_t>(r >> 4));
     embed[2] = HexDigitUpper(r);
@@ -357,15 +357,6 @@ bool BuildJumpPatch(std::uint8_t* buffer, std::size_t size, const void* source, 
 bool LikelyHeapDataPointer(const void* p) {
     const auto u = reinterpret_cast<std::uintptr_t>(p);
     return u >= 0x00010000u && u <= 0x7FFEFFFFu;
-}
-
-D3DCOLOR AddColorFromCanonicalArgb(D3DCOLOR canonical) {
-    const std::uint32_t u = static_cast<std::uint32_t>(canonical);
-    const std::uint32_t a = (u >> 24) & 0xFFu;
-    const std::uint32_t r = (u >> 16) & 0xFFu;
-    const std::uint32_t g = (u >> 8) & 0xFFu;
-    const std::uint32_t b = u & 0xFFu;
-    return static_cast<D3DCOLOR>((a << 24) | (g << 16) | (b << 8) | r);
 }
 
 bool LooksLikeNearJeSkip(const void* address) {
@@ -930,7 +921,7 @@ void __fastcall LocalPlayerChatDetour(void* thisPtr, void* /*edx*/, const char* 
         return;
     }
 
-    chat_bubble::PushLocalPlayerBubble(context, text, kFallbackColor, g_runtime.lifeMs);
+    chat_bubble::PushLocalPlayerBubble(context, text, g_runtime.ownChatBubbleColor, g_runtime.lifeMs);
 }
 
 }  // namespace
@@ -979,9 +970,22 @@ bool ParseColorString(const char* input, D3DCOLOR* outColor) {
             return false;
         }
         if (n == 6) {
-            return PackD3dArgbFromRrggbb6(s, outColor);
+            return PackD3dRrggbbaaFromRrggbb6(s, outColor);
         }
-        return PackD3dArgbFromAarrggbb8(s, outColor);
+        return PackD3dRrggbbaaFromRrggbbaa8(s, outColor);
+    }
+
+    const char* t = s;
+    std::size_t hexLen = 0;
+    while (IsHexDigit(*t)) {
+        ++t;
+        ++hexLen;
+    }
+    if (*SkipSpaces(t) == '\0' && (hexLen == 6 || hexLen == 8)) {
+        if (hexLen == 6) {
+            return PackD3dRrggbbaaFromRrggbb6(s, outColor);
+        }
+        return PackD3dRrggbbaaFromRrggbbaa8(s, outColor);
     }
 
     char* end = nullptr;
@@ -1007,6 +1011,9 @@ void BuildOverlayText(char* out, std::size_t cap, const OverlayCommandRule& rule
         return;
     }
 
+    char msgWhole[kLineMax] = {};
+    TrimCopyRange(rest, rest + std::strlen(rest), msgWhole, sizeof(msgWhole));
+
     char seg0[kLineMax] = {};
     char seg1[kLineMax] = {};
     SplitRestIntoSegments(rest, rule.bubbleSplit, seg0, seg1, sizeof(seg0));
@@ -1017,42 +1024,51 @@ void BuildOverlayText(char* out, std::size_t cap, const OverlayCommandRule& rule
     const D3DCOLOR c2 = rule.accentColorValid ? rule.accentColor : rule.color;
 
     for (const char* p = rule.bubbleTemplate; *p != '\0';) {
-        if (p[0] == '{' && p[1] == '0' && p[2] == '}') {
-            if (!AppendCStringTrunc(out, cap, used, seg0)) {
-                return;
+        if (p[0] == '[') {
+            if (std::strncmp(p, "[msg]", 5) == 0) {
+                if (!AppendCStringTrunc(out, cap, used, msgWhole)) {
+                    return;
+                }
+                if (maxLine > 0 && MeasureEnsure()) {
+                    AdvanceLineLayout(maxLine, linePx, msgWhole, std::strlen(msgWhole));
+                }
+                p += 5;
+                continue;
             }
-            if (maxLine > 0 && MeasureEnsure()) {
-                AdvanceLineLayout(maxLine, linePx, seg0, std::strlen(seg0));
+            if (std::strncmp(p, "[a]", 3) == 0) {
+                if (!AppendCStringTrunc(out, cap, used, seg0)) {
+                    return;
+                }
+                if (maxLine > 0 && MeasureEnsure()) {
+                    AdvanceLineLayout(maxLine, linePx, seg0, std::strlen(seg0));
+                }
+                p += 3;
+                continue;
             }
-            p += 3;
-            continue;
-        }
-
-        if (p[0] == '{' && p[1] == '1' && p[2] == '}') {
-            if (!AppendCStringTrunc(out, cap, used, seg1)) {
-                return;
+            if (std::strncmp(p, "[b]", 3) == 0) {
+                if (!AppendCStringTrunc(out, cap, used, seg1)) {
+                    return;
+                }
+                if (maxLine > 0 && MeasureEnsure()) {
+                    AdvanceLineLayout(maxLine, linePx, seg1, std::strlen(seg1));
+                }
+                p += 3;
+                continue;
             }
-            if (maxLine > 0 && MeasureEnsure()) {
-                AdvanceLineLayout(maxLine, linePx, seg1, std::strlen(seg1));
+            if (std::strncmp(p, "[c]", 3) == 0) {
+                if (!AppendColorEmbed(out, cap, used, maxLine, linePx, rule.color)) {
+                    return;
+                }
+                p += 3;
+                continue;
             }
-            p += 3;
-            continue;
-        }
-
-        if (p[0] == '{' && p[1] == 'c' && p[2] == '1' && p[3] == '}') {
-            if (!AppendColorEmbed(out, cap, used, maxLine, linePx, rule.color)) {
-                return;
+            if (std::strncmp(p, "[d]", 3) == 0) {
+                if (!AppendColorEmbed(out, cap, used, maxLine, linePx, c2)) {
+                    return;
+                }
+                p += 3;
+                continue;
             }
-            p += 4;
-            continue;
-        }
-
-        if (p[0] == '{' && p[1] == 'c' && p[2] == '2' && p[3] == '}') {
-            if (!AppendColorEmbed(out, cap, used, maxLine, linePx, c2)) {
-                return;
-            }
-            p += 4;
-            continue;
         }
 
         if (!AppendChar(out, cap, used, *p)) {
@@ -1127,7 +1143,7 @@ void PushLocalPlayerBubble(
         g_runtime.version->chatBubbleAddOffset,
         static_cast<unsigned int>(context.id),
         line,
-        AddColorFromCanonicalArgb(color),
+        color,
         context.distanceToCamera,
         lifeMs);
 }

@@ -26,6 +26,7 @@ constexpr char kConfigKeyCommand[] = "Command";
 constexpr char kConfigKeyEnabled[] = "EnabledByDefault";
 constexpr char kConfigKeyMirrorOwnChatBubble[] = "MirrorOwnChatBubble";
 constexpr char kConfigKeyChatBubbleLifeMs[] = "ChatBubbleLifeMs";
+constexpr char kConfigKeyOwnChatBubbleColor[] = "OwnChatBubbleColor";
 /** Дефолт ширины строки бабла (px), если INI без ключа; по rizin во всех строках `kSupportedVersions` — **257** (`push 0x101` перед внутренним `DrawText`). */
 constexpr char kConfigKeyOverlayBubbleLinePx[] = "OverlayBubbleLinePx";
 constexpr char kDefaultCommand[] = "/tagon";
@@ -94,6 +95,7 @@ struct PluginState {
     bool renderEnabled = true;
     bool mirrorOwnChatBubble = false;
     int chatBubbleLifeMs = chat_bubble::kDefaultLifeMs;
+    D3DCOLOR ownChatBubbleColor = kFallbackLabelColor;
     /** `0` — не вставлять `\n` перед `{RRGGBB}`; иначе макс. ширина строки (px), R1 из rizin. */
     int overlayBubbleLinePx = chat_bubble::kDefaultOverlayLinePx;
     char toggleCommand[kToggleCommandMax] = "/tagon";
@@ -514,6 +516,7 @@ bool InstallHooks() {
     bubbleConfig.mirrorOwnChatBubble = g_state.mirrorOwnChatBubble;
     bubbleConfig.lifeMs = g_state.chatBubbleLifeMs;
     bubbleConfig.overlayLinePx = g_state.overlayBubbleLinePx;
+    bubbleConfig.ownChatBubbleColor = g_state.ownChatBubbleColor;
     bubbleConfig.buildLocalContext = &BuildLocalChatBubbleContext;
     chat_bubble::Configure(bubbleConfig);
 
@@ -656,21 +659,24 @@ void WriteDefaultTagOnPlayerIniIfAbsent(const char* iniPath) {
         "EnabledByDefault=1\r\n"
         "MirrorOwnChatBubble=1\r\n"
         "ChatBubbleLifeMs=6000\r\n"
+        "; OwnChatBubbleColor: mirror bubble for outgoing chat without leading / — same formats as ColorN "
+        "(see README).\r\n"
+        "OwnChatBubbleColor={FFFFFF}\r\n"
         "; OverlayBubbleLinePx: max bubble text line width (px) for overlay bubble wrap heuristic (GDI vs D3DX). "
         "Per supported samp.dll (rizin): 257 (`push 0x101` before inner DrawText); 0=off.\r\n"
         "OverlayBubbleLinePx=257\r\n"
         "\r\n"
-        "; [OverlayCommands] ColorN: only {RRGGBB}, {AARRGGBB} (dword ARGB), or signed decimal D3DCOLOR.\r\n"
-        "; Optional: BubbleTemplateN, BubbleSplitN, AccentColorN\r\n"
-        "; Placeholders: {0} first segment, {1} after first BubbleSplit, {c1}/{c2} embed {RRGGBB} from ColorN / "
-        "AccentColorN\r\n"
+        "; [OverlayCommands] ColorN: {RRGGBB}, {RRGGBBAA}, bare 6/8 hex (RRGGBB / RRGGBBAA), or signed decimal "
+        "D3DCOLOR (RRGGBBAA dword).\r\n"
+        "; BubbleTemplateN: placeholders [msg] full tail, [a]/[b] before/after BubbleSplitN, [c]/[d] color embeds "
+        "({RRGGBB}) from ColorN / AccentColorN.\r\n"
         "; IC speech without /cmd is not matched here.\r\n"
         "[OverlayCommands]\r\n"
-        "Count=14\r\n"
+        "Count=3\r\n"
         "Cmd1=/me\r\n"
         "Color1={ff90ff}\r\n"
         "Forward1=1\r\n"
-        "BubbleTemplate1={c1}* {0}\r\n"
+        "BubbleTemplate1=[c]* [a]\r\n"
         "Cmd2=/do\r\n"
         "Color2={D6A2E8}\r\n"
         "Forward2=1\r\n"
@@ -679,7 +685,7 @@ void WriteDefaultTagOnPlayerIniIfAbsent(const char* iniPath) {
         "Forward3=1\r\n"
         "BubbleSplit3=*\r\n"
         "AccentColor3={FF99FF}\r\n"
-        "BubbleTemplate3={c1}{0}*{c2}{1}";
+        "BubbleTemplate3=[c][a]*[d][b]";
 
     HANDLE h = CreateFileA(
         iniPath,
@@ -778,6 +784,14 @@ void LoadConfig() {
     }
     g_state.chatBubbleLifeMs = life;
 
+    char ownBubbleColorBuf[48] = {};
+    GetPrivateProfileStringA(
+        kConfigSection, kConfigKeyOwnChatBubbleColor, "", ownBubbleColorBuf, sizeof(ownBubbleColorBuf), iniPath);
+    if (ownBubbleColorBuf[0] == '\0'
+        || !chat_bubble::ParseColorString(ownBubbleColorBuf, &g_state.ownChatBubbleColor)) {
+        g_state.ownChatBubbleColor = kFallbackLabelColor;
+    }
+
     LoadOverlayBubbleLinePxFromIni(iniPath, chat_bubble::kDefaultOverlayLinePx);
 
     LoadOverlayCommands(iniPath);
@@ -792,6 +806,18 @@ void LoadConfig() {
     char lifeStr[16] = {};
     _snprintf_s(lifeStr, _TRUNCATE, "%d", g_state.chatBubbleLifeMs);
     WritePrivateProfileStringA(kConfigSection, kConfigKeyChatBubbleLifeMs, lifeStr, iniPath);
+    char ownColorStr[20] = {};
+    const D3DCOLOR oc = g_state.ownChatBubbleColor;
+    const unsigned r = static_cast<unsigned>((oc >> 24) & 0xFFu);
+    const unsigned g = static_cast<unsigned>((oc >> 16) & 0xFFu);
+    const unsigned b = static_cast<unsigned>((oc >> 8) & 0xFFu);
+    const unsigned a = static_cast<unsigned>(oc & 0xFFu);
+    if (a != 0xFFu) {
+        _snprintf_s(ownColorStr, _TRUNCATE, "{%02X%02X%02X%02X}", r, g, b, a);
+    } else {
+        _snprintf_s(ownColorStr, _TRUNCATE, "{%02X%02X%02X}", r, g, b);
+    }
+    WritePrivateProfileStringA(kConfigSection, kConfigKeyOwnChatBubbleColor, ownColorStr, iniPath);
     char linePxStr[16] = {};
     _snprintf_s(linePxStr, _TRUNCATE, "%d", g_state.overlayBubbleLinePx);
     WritePrivateProfileStringA(kConfigSection, kConfigKeyOverlayBubbleLinePx, linePxStr, iniPath);
