@@ -1,6 +1,8 @@
 # tagOnPlayer
 
-<img width="480" height="270" alt="tagOnPlayer" src="https://github.com/user-attachments/assets/ec4425f7-baf5-4470-ac13-84a490e06d0b" />
+<p align="center">
+  <img alt="tagOnPlayer" src="https://raw.githubusercontent.com/dmitriyewich/tagOnPlayer/main/docs/screen/main.gif" />
+</p>
 
 ASI-плагин для **GTA San Andreas 1.0 US** + **SA:MP** (`samp.dll`, Win32): после штатных циклов **`CPlayerTags`** дорисовывает над **локальным** игроком те же элементы, что клиент рисует для удалённых — **`DrawLabel`** (ник и ID) и **`DrawHealthBar`**. Опционально — зеркало исходящего чата в **`CChatBubble`**.
 
@@ -15,6 +17,22 @@ ASI-плагин для **GTA San Andreas 1.0 US** + **SA:MP** (`samp.dll`, Win3
 - **Зеркало чата** (`MirrorOwnChatBubble=1`): **`CChatBubble::Add`** + те же правки **`CChatBubble::Draw`**, что ниже (только хук на чат и зеркалирование строки).
 - **Стек чат-баблов** (`StackChatBubbles=1`): несколько последних **`CChatBubble`** на игрока (все ID, включая локального) рисуются **одним многострочным баблом** (старые сверху, новый снизу), цвет каждой строки переносится через **`{RRGGBB}`**. Межстрочные интервалы и перенос — родные (наложений нет в принципе); весь блок поднимается так, чтобы новейший оказался на штатной высоте бабла (через временный сдвиг глобали **`getChatBubbleHeight`**). Без ImGui. Истечение строк — по **`ChatBubbleLifeMs`**/`lifeSpan`.
 - **Текст по команде** (секция **`[OverlayCommands]`**): тот же путь, что зеркало — **`CChatBubble::Add`** с цветом из правила и **`ChatBubbleLifeMs`**; хвост после команды в бабл; пустая команда — короткий **`Add`** для гашения. Патчи **`Draw`** включаются, если **`MirrorOwnChatBubble=1`**, **`StackChatBubbles=1`** **или** в INI задан **`Count` > 0** для оверлея.
+
+---
+
+## Примеры
+
+<p align="center">
+  <img alt="Пример 1" src="https://raw.githubusercontent.com/dmitriyewich/tagOnPlayer/main/docs/screen/primer1.gif" />
+  <img alt="Пример 2" src="https://raw.githubusercontent.com/dmitriyewich/tagOnPlayer/main/docs/screen/primer2.gif" />
+  <img alt="Пример 3" src="https://raw.githubusercontent.com/dmitriyewich/tagOnPlayer/main/docs/screen/primer3.gif" />
+</p>
+
+Стек чат-баблов (**`StackChatBubbles=1`**):
+
+<p align="center">
+  <img alt="StackChatBubbles=1" src="https://raw.githubusercontent.com/dmitriyewich/tagOnPlayer/main/docs/screen/multichat.gif" />
+</p>
 
 ---
 
