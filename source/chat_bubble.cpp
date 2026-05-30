@@ -930,6 +930,7 @@ namespace chat_bubble {
 
 void Configure(const RuntimeConfig& config) {
     g_runtime = config;
+    SyncStackRuntime(config);
 }
 
 void Shutdown() {
@@ -1085,8 +1086,8 @@ void BuildOverlayText(char* out, std::size_t cap, const OverlayCommandRule& rule
     }
 }
 
-bool WantLocalDrawPatches(bool mirrorOwnChatBubble, unsigned int overlayRuleCount) {
-    return mirrorOwnChatBubble || overlayRuleCount > 0;
+bool WantLocalDrawPatches(bool mirrorOwnChatBubble, unsigned int overlayRuleCount, bool stackChatBubbles) {
+    return mirrorOwnChatBubble || overlayRuleCount > 0 || stackChatBubbles;
 }
 
 bool InstallLocalDrawPatches() {
@@ -1146,6 +1147,46 @@ void PushLocalPlayerBubble(
         color,
         context.distanceToCamera,
         lifeMs);
+}
+
+int MeasureBubbleLineCount(const char* text, int maxLinePx) {
+    if (text == nullptr || text[0] == '\0') {
+        return 1;
+    }
+
+    int lines = 1;
+    if (maxLinePx <= 0 || !MeasureEnsure()) {
+        for (const char* p = text; *p != '\0'; ++p) {
+            if (*p == '\n') {
+                ++lines;
+            }
+        }
+        return lines;
+    }
+
+    int linePx = 0;
+    for (const char* p = text; *p != '\0';) {
+        if (*p == '\n') {
+            ++lines;
+            linePx = 0;
+            ++p;
+            continue;
+        }
+        if (*p == '{' && IsHexDigit(p[1]) && IsHexDigit(p[2]) && IsHexDigit(p[3])
+            && IsHexDigit(p[4]) && IsHexDigit(p[5]) && IsHexDigit(p[6]) && p[7] == '}') {
+            p += 8;  // {RRGGBB} не занимает ширину
+            continue;
+        }
+        const int w = MeasureCharWidthA(*p);
+        if (linePx + w > maxLinePx && linePx > 0) {
+            ++lines;
+            linePx = w;
+        } else {
+            linePx += w;
+        }
+        ++p;
+    }
+    return lines;
 }
 
 }  // namespace chat_bubble

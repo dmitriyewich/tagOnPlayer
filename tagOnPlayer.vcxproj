@@ -84,6 +84,7 @@
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClCompile Include="source\chat_bubble.cpp" />
+    <ClCompile Include="source\chat_bubble_stack.cpp" />
     <ClCompile Include="source\main.cpp" />
     <ClCompile Include="source\external\MinHook\src\buffer.c" />
     <ClCompile Include="source\external\MinHook\src\hook.c" />

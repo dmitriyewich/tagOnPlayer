@@ -9,6 +9,9 @@ namespace chat_bubble {
 
 constexpr int kDefaultLifeMs = 6000;
 constexpr int kDefaultOverlayLinePx = 257;
+constexpr int kDefaultStackMax = 5;
+constexpr int kDefaultStackMarginPx = 5;
+constexpr unsigned int kMaxStackedBubblesHardMax = 16;
 constexpr unsigned int kOverlayMaxRules = 16;
 constexpr std::size_t kOverlayCommandMax = 64;
 constexpr std::size_t kOverlayTemplateMax = 128;
@@ -42,6 +45,9 @@ struct RuntimeConfig {
     /** Цвет текста зеркала исходящего чата без ведущего `/` (не оверлей-команды). */
     D3DCOLOR ownChatBubbleColor = 0xFFFFFFFFu;
     BuildLocalContextFn buildLocalContext = nullptr;
+    bool stackChatBubbles = false;
+    int stackMax = kDefaultStackMax;
+    int stackMarginPx = kDefaultStackMarginPx;
 };
 
 void Configure(const RuntimeConfig& config);
@@ -50,9 +56,14 @@ void Shutdown();
 bool ParseColorString(const char* input, D3DCOLOR* outColor);
 void BuildOverlayText(char* out, std::size_t cap, const OverlayCommandRule& rule, const char* rest);
 
-bool WantLocalDrawPatches(bool mirrorOwnChatBubble, unsigned int overlayRuleCount);
+bool WantLocalDrawPatches(bool mirrorOwnChatBubble, unsigned int overlayRuleCount, bool stackChatBubbles);
 bool InstallLocalDrawPatches();
 bool InstallLocalPlayerChatHook();
+bool InstallStackHooks();
+
+void SyncStackRuntime(const RuntimeConfig& config);
+
+int MeasureBubbleLineCount(const char* text, int maxLinePx);
 
 void PushLocalPlayerBubble(
     const LocalPlayerContext& context,

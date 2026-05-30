@@ -29,6 +29,9 @@ constexpr char kConfigKeyChatBubbleLifeMs[] = "ChatBubbleLifeMs";
 constexpr char kConfigKeyOwnChatBubbleColor[] = "OwnChatBubbleColor";
 /** Дефолт ширины строки бабла (px), если INI без ключа; по rizin во всех строках `kSupportedVersions` — **257** (`push 0x101` перед внутренним `DrawText`). */
 constexpr char kConfigKeyOverlayBubbleLinePx[] = "OverlayBubbleLinePx";
+constexpr char kConfigKeyStackChatBubbles[] = "StackChatBubbles";
+constexpr char kConfigKeyStackedChatBubbleMax[] = "StackedChatBubbleMax";
+constexpr char kConfigKeyStackedChatBubbleMarginPx[] = "StackedChatBubbleMarginPx";
 constexpr char kDefaultCommand[] = "/tagon";
 constexpr std::size_t kToggleCommandMax = 64;
 constexpr char kOverlaySection[] = "OverlayCommands";
@@ -71,14 +74,14 @@ struct GameCamera {
 constexpr std::array<SampVersionInfo, 8> kSupportedVersions{{
     // chatBubbleDrawOffset — RVA CChatBubble::Draw (канон SAMP-API / rizin); chatBubbleLocalSkipJeRva — начало near-je
     // «пропуск слота», если флаг видимости бабла нулевой (в т.ч. локальный игрок); патч: 6×NOP поверх 0F 84 …
-    {0x31DF13, SampVersion::R1,    "R1",    0x0021A0F8, 0x0021A0B0, 0x00070D40, 0x0006FC30, 0x00065C60, 0x000686A0, 0x000686B0, 0x000686C0, 0x00068FD0, 0x00068670, 0x000689C0, 0x00001160, 0x00001A30, 0x00013CE0, 0x00003D90, 0x000A65A0, 0x000A6610, 0x000A6650, 0x000A8D70, 0x00000004, 0x00000000, 0x000057F0, 0x0021A0DC, 0x00063250, 0x00063310, 0x000633DA, 0x000633B7, 0x000633BF, 0x000633F4, 0x00063495, 0x00000000, 0x00000000, kChatBubblePoolTrampEcxJe8, 257},
-    {0x3195DD, SampVersion::R2,    "R2",    0x0021A100, 0x0021A0B8, 0x00070DE0, 0x0006FCD0, 0x00065D30, 0x00068770, 0x00068780, 0x00068790, 0x000690A0, 0x00068740, 0x00068A90, 0x00001170, 0x00001A40, 0x00013DA0, 0x00003DA0, 0x000A6770, 0x000A67E0, 0x000A6820, 0x000A8F40, 0x00000000, 0x00000000, 0x000058C0, 0x0021A0E4, 0x00063320, 0x000633E0, 0x000634AA, 0x00063481, 0x0006348C, 0x000634C3, 0x00063564, 0x00000000, 0x00000000, kChatBubblePoolTrampEcxLeaJe11, 257},
-    {0x0CC490, SampVersion::R3,    "R3",    0x0026E8DC, 0x0026E890, 0x00074C30, 0x00073B20, 0x00069190, 0x0006C610, 0x0006C620, 0x0006C630, 0x0006CF40, 0x0006C5E0, 0x0006C930, 0x00001160, 0x00001A30, 0x00016F00, 0x00003DA0, 0x000AB430, 0x000AB480, 0x000AB4C0, 0x000ADC00, 0x00002F1C, 0x00000000, 0x00005820, 0x0026E8C0, 0x000666A0, 0x00066760, 0x0006682C, 0x00066805, 0x0006680D, 0x00066846, 0x000668E7, 0x00000000, 0x00000000, kChatBubblePoolTrampEdxJe8, 257},
-    {0x0CC4D0, SampVersion::R3_1,  "R3-1",  0x0026E8DC, 0x0026E890, 0x00074C30, 0x00073B20, 0x00069190, 0x0006C610, 0x0006C620, 0x0006C630, 0x0006CF40, 0x0006C5E0, 0x0006C930, 0x00001160, 0x00001A30, 0x00016F00, 0x00003DA0, 0x000AB450, 0x000AB4C0, 0x000AB500, 0x000ADBF0, 0x00002F1C, 0x00000000, 0x00005820, 0x0026E8C0, 0x000666A0, 0x00066760, 0x0006682C, 0x00066805, 0x0006680D, 0x00066846, 0x000668E7, 0x00000000, 0x00000000, kChatBubblePoolTrampEdxJe8, 257},
-    {0x0CBCB0, SampVersion::R4,    "R4",    0x0026EA0C, 0x0026E9C0, 0x00075360, 0x00074240, 0x000698C0, 0x0006CD40, 0x0006CD50, 0x0006CD60, 0x0006D670, 0x0006CD10, 0x0006D060, 0x00001170, 0x00001A40, 0x00017570, 0x00003F10, 0x000ABCF0, 0x000ABD60, 0x000ABDA0, 0x000AE490, 0x0000000C, 0x00000104, 0x00005918, 0x0026E9F0, 0x00066DD0, 0x00066E90, 0x00066F60, 0x00066F31, 0x00066F3C, 0x00066F7C, 0x0006701D, 0x00000000, 0x00000000, kChatBubblePoolTrampEcxLeaJe11, 257},
-    {0x0CBCD0, SampVersion::R4_2,  "R4-2",  0x0026EA0C, 0x0026E9C0, 0x00075390, 0x00074270, 0x00069900, 0x0006CD80, 0x0006CD90, 0x0006CDA0, 0x0006D6B0, 0x0006CD50, 0x0006D0A0, 0x00001170, 0x00001A40, 0x000175C0, 0x00003F20, 0x000ABD20, 0x000ABD90, 0x000ABDD0, 0x000AE4C0, 0x00000004, 0x00000104, 0x00005A10, 0x0026E9F0, 0x00066E10, 0x00066ED0, 0x00066FA0, 0x00066F6E, 0x00066F79, 0x00066FBC, 0x0006705D, 0x00000000, 0x00000000, kChatBubblePoolTrampEcxLeaJe11, 257},
-    {0x0CBC90, SampVersion::R5_1,  "R5-1",  0x0026EB94, 0x0026EB48, 0x00075330, 0x00074210, 0x00069900, 0x0006CD80, 0x0006CD90, 0x0006CDA0, 0x0006D6B0, 0x0006CD50, 0x0006D0A0, 0x00001170, 0x00001A40, 0x000175C0, 0x00003F20, 0x000ABCE0, 0x000ABD50, 0x000ABD90, 0x000AE480, 0x00000004, 0x00000104, 0x00005A10, 0x0026EB78, 0x00066E10, 0x00066ED0, 0x00066FA0, 0x00066F6E, 0x00066F79, 0x00066FBC, 0x0006705D, 0x00000000, 0x00000000, kChatBubblePoolTrampEcxLeaJe11, 257},
-    {0x0FDB60, SampVersion::DL_R1, "DL-R1", 0x002ACA24, 0x002AC9D8, 0x00074DC0, 0x00073CB0, 0x00069340, 0x0006C7C0, 0x0006C7D0, 0x0006C7E0, 0x0006D0F0, 0x0006C790, 0x0006CAE0, 0x00001170, 0x00001A80, 0x000170D0, 0x00003E20, 0x000AB900, 0x000AB970, 0x000AB9B0, 0x000AE080, 0x00000000, 0x00000000, 0x00005860, 0x002ACA08, 0x00066890, 0x00066950, 0x00066A1A, 0x000669F1, 0x000669FC, 0x00066A33, 0x00066AD4, 0x00066A03, 0x00066A0A, kChatBubblePoolTrampEcxLeaJe11, 257},
+    {0x31DF13, SampVersion::R1,    "R1",    0x0021A0F8, 0x0021A0B0, 0x00070D40, 0x0006FC30, 0x00065C60, 0x000686A0, 0x000686B0, 0x000686C0, 0x00068FD0, 0x00068670, 0x000689C0, 0x00001160, 0x00001A30, 0x00013CE0, 0x00003D90, 0x000A65A0, 0x000A6610, 0x000A6650, 0x000A8D70, 0x00000004, 0x00000000, 0x000057F0, 0x0021A0DC, 0x00063250, 0x00063310, 0x000633DA, 0x000633B7, 0x000633BF, 0x000633F4, 0x00063495, 0x00000000, 0x00000000, kChatBubblePoolTrampEcxJe8, 0x000D795C, 257},
+    {0x3195DD, SampVersion::R2,    "R2",    0x0021A100, 0x0021A0B8, 0x00070DE0, 0x0006FCD0, 0x00065D30, 0x00068770, 0x00068780, 0x00068790, 0x000690A0, 0x00068740, 0x00068A90, 0x00001170, 0x00001A40, 0x00013DA0, 0x00003DA0, 0x000A6770, 0x000A67E0, 0x000A6820, 0x000A8F40, 0x00000000, 0x00000000, 0x000058C0, 0x0021A0E4, 0x00063320, 0x000633E0, 0x000634AA, 0x00063481, 0x0006348C, 0x000634C3, 0x00063564, 0x00000000, 0x00000000, kChatBubblePoolTrampEcxLeaJe11, 0x000D796C, 257},
+    {0x0CC490, SampVersion::R3,    "R3",    0x0026E8DC, 0x0026E890, 0x00074C30, 0x00073B20, 0x00069190, 0x0006C610, 0x0006C620, 0x0006C630, 0x0006CF40, 0x0006C5E0, 0x0006C930, 0x00001160, 0x00001A30, 0x00016F00, 0x00003DA0, 0x000AB430, 0x000AB480, 0x000AB4C0, 0x000ADC00, 0x00002F1C, 0x00000000, 0x00005820, 0x0026E8C0, 0x000666A0, 0x00066760, 0x0006682C, 0x00066805, 0x0006680D, 0x00066846, 0x000668E7, 0x00000000, 0x00000000, kChatBubblePoolTrampEdxJe8, 0x000E9C3C, 257},
+    {0x0CC4D0, SampVersion::R3_1,  "R3-1",  0x0026E8DC, 0x0026E890, 0x00074C30, 0x00073B20, 0x00069190, 0x0006C610, 0x0006C620, 0x0006C630, 0x0006CF40, 0x0006C5E0, 0x0006C930, 0x00001160, 0x00001A30, 0x00016F00, 0x00003DA0, 0x000AB450, 0x000AB4C0, 0x000AB500, 0x000ADBF0, 0x00002F1C, 0x00000000, 0x00005820, 0x0026E8C0, 0x000666A0, 0x00066760, 0x0006682C, 0x00066805, 0x0006680D, 0x00066846, 0x000668E7, 0x00000000, 0x00000000, kChatBubblePoolTrampEdxJe8, 0x000E9C3C, 257},
+    {0x0CBCB0, SampVersion::R4,    "R4",    0x0026EA0C, 0x0026E9C0, 0x00075360, 0x00074240, 0x000698C0, 0x0006CD40, 0x0006CD50, 0x0006CD60, 0x0006D670, 0x0006CD10, 0x0006D060, 0x00001170, 0x00001A40, 0x00017570, 0x00003F10, 0x000ABCF0, 0x000ABD60, 0x000ABDA0, 0x000AE490, 0x0000000C, 0x00000104, 0x00005918, 0x0026E9F0, 0x00066DD0, 0x00066E90, 0x00066F60, 0x00066F31, 0x00066F3C, 0x00066F7C, 0x0006701D, 0x00000000, 0x00000000, kChatBubblePoolTrampEcxLeaJe11, 0x000E9C94, 257},
+    {0x0CBCD0, SampVersion::R4_2,  "R4-2",  0x0026EA0C, 0x0026E9C0, 0x00075390, 0x00074270, 0x00069900, 0x0006CD80, 0x0006CD90, 0x0006CDA0, 0x0006D6B0, 0x0006CD50, 0x0006D0A0, 0x00001170, 0x00001A40, 0x000175C0, 0x00003F20, 0x000ABD20, 0x000ABD90, 0x000ABDD0, 0x000AE4C0, 0x00000004, 0x00000104, 0x00005A10, 0x0026E9F0, 0x00066E10, 0x00066ED0, 0x00066FA0, 0x00066F6E, 0x00066F79, 0x00066FBC, 0x0006705D, 0x00000000, 0x00000000, kChatBubblePoolTrampEcxLeaJe11, 0x000E9C94, 257},
+    {0x0CBC90, SampVersion::R5_1,  "R5-1",  0x0026EB94, 0x0026EB48, 0x00075330, 0x00074210, 0x00069900, 0x0006CD80, 0x0006CD90, 0x0006CDA0, 0x0006D6B0, 0x0006CD50, 0x0006D0A0, 0x00001170, 0x00001A40, 0x000175C0, 0x00003F20, 0x000ABCE0, 0x000ABD50, 0x000ABD90, 0x000AE480, 0x00000004, 0x00000104, 0x00005A10, 0x0026EB78, 0x00066E10, 0x00066ED0, 0x00066FA0, 0x00066F6E, 0x00066F79, 0x00066FBC, 0x0006705D, 0x00000000, 0x00000000, kChatBubblePoolTrampEcxLeaJe11, 0x000E9C94, 257},
+    {0x0FDB60, SampVersion::DL_R1, "DL-R1", 0x002ACA24, 0x002AC9D8, 0x00074DC0, 0x00073CB0, 0x00069340, 0x0006C7C0, 0x0006C7D0, 0x0006C7E0, 0x0006D0F0, 0x0006C790, 0x0006CAE0, 0x00001170, 0x00001A80, 0x000170D0, 0x00003E20, 0x000AB900, 0x000AB970, 0x000AB9B0, 0x000AE080, 0x00000000, 0x00000000, 0x00005860, 0x002ACA08, 0x00066890, 0x00066950, 0x00066A1A, 0x000669F1, 0x000669FC, 0x00066A33, 0x00066AD4, 0x00066A03, 0x00066A0A, kChatBubblePoolTrampEcxLeaJe11, 0x0011BCCC, 257},
 }};
 
 /** Циклы тегов — `CPlayerTags::__thiscall` (`this` в `ECX`). Хук — `__fastcall(void*,void*)`: тот же `ECX`, второй аргумент в `EDX` не используется (совместимо с точкой входа). */
@@ -98,6 +101,9 @@ struct PluginState {
     D3DCOLOR ownChatBubbleColor = kFallbackLabelColor;
     /** `0` — не вставлять `\n` перед `{RRGGBB}`; иначе макс. ширина строки (px), R1 из rizin. */
     int overlayBubbleLinePx = chat_bubble::kDefaultOverlayLinePx;
+    bool stackChatBubbles = false;
+    int stackedChatBubbleMax = chat_bubble::kDefaultStackMax;
+    int stackedChatBubbleMarginPx = chat_bubble::kDefaultStackMarginPx;
     char toggleCommand[kToggleCommandMax] = "/tagon";
     std::array<chat_bubble::OverlayCommandRule, chat_bubble::kOverlayMaxRules> overlayRules{};
     unsigned int overlayRuleCount = 0;
@@ -518,9 +524,13 @@ bool InstallHooks() {
     bubbleConfig.overlayLinePx = g_state.overlayBubbleLinePx;
     bubbleConfig.ownChatBubbleColor = g_state.ownChatBubbleColor;
     bubbleConfig.buildLocalContext = &BuildLocalChatBubbleContext;
+    bubbleConfig.stackChatBubbles = g_state.stackChatBubbles;
+    bubbleConfig.stackMax = g_state.stackedChatBubbleMax;
+    bubbleConfig.stackMarginPx = g_state.stackedChatBubbleMarginPx;
     chat_bubble::Configure(bubbleConfig);
 
-    if (chat_bubble::WantLocalDrawPatches(g_state.mirrorOwnChatBubble, g_state.overlayRuleCount)) {
+    if (chat_bubble::WantLocalDrawPatches(
+            g_state.mirrorOwnChatBubble, g_state.overlayRuleCount, g_state.stackChatBubbles)) {
         if (!chat_bubble::InstallLocalDrawPatches()) {
             return false;
         }
@@ -551,6 +561,10 @@ bool InstallHooks() {
     }
 
     if (!chat_bubble::InstallLocalPlayerChatHook()) {
+        return false;
+    }
+
+    if (!chat_bubble::InstallStackHooks()) {
         return false;
     }
 
@@ -665,6 +679,10 @@ void WriteDefaultTagOnPlayerIniIfAbsent(const char* iniPath) {
         "; OverlayBubbleLinePx: max bubble text line width (px) for overlay bubble wrap heuristic (GDI vs D3DX). "
         "Per supported samp.dll (rizin): 257 (`push 0x101` before inner DrawText); 0=off.\r\n"
         "OverlayBubbleLinePx=257\r\n"
+        "; StackChatBubbles: 1 = stack recent chat bubbles above players (native CLabel draw).\r\n"
+        "StackChatBubbles=0\r\n"
+        "StackedChatBubbleMax=5\r\n"
+        "StackedChatBubbleMarginPx=5\r\n"
         "\r\n"
         "; [OverlayCommands] ColorN: {RRGGBB}, {RRGGBBAA}, bare 6/8 hex (RRGGBB / RRGGBBAA), or signed decimal "
         "D3DCOLOR (RRGGBBAA dword).\r\n"
@@ -794,6 +812,29 @@ void LoadConfig() {
 
     LoadOverlayBubbleLinePxFromIni(iniPath, chat_bubble::kDefaultOverlayLinePx);
 
+    int stack = GetPrivateProfileIntA(kConfigSection, kConfigKeyStackChatBubbles, 0, iniPath);
+    g_state.stackChatBubbles = (stack != 0);
+
+    int stackMax = GetPrivateProfileIntA(
+        kConfigSection, kConfigKeyStackedChatBubbleMax, chat_bubble::kDefaultStackMax, iniPath);
+    if (stackMax < 1) {
+        stackMax = 1;
+    }
+    if (stackMax > static_cast<int>(chat_bubble::kMaxStackedBubblesHardMax)) {
+        stackMax = static_cast<int>(chat_bubble::kMaxStackedBubblesHardMax);
+    }
+    g_state.stackedChatBubbleMax = stackMax;
+
+    int stackMargin = GetPrivateProfileIntA(
+        kConfigSection, kConfigKeyStackedChatBubbleMarginPx, chat_bubble::kDefaultStackMarginPx, iniPath);
+    if (stackMargin < 0) {
+        stackMargin = 0;
+    }
+    if (stackMargin > 64) {
+        stackMargin = 64;
+    }
+    g_state.stackedChatBubbleMarginPx = stackMargin;
+
     LoadOverlayCommands(iniPath);
 
     WritePrivateProfileStringA(kConfigSection, kConfigKeyCommand, g_state.toggleCommand, iniPath);
@@ -821,6 +862,16 @@ void LoadConfig() {
     char linePxStr[16] = {};
     _snprintf_s(linePxStr, _TRUNCATE, "%d", g_state.overlayBubbleLinePx);
     WritePrivateProfileStringA(kConfigSection, kConfigKeyOverlayBubbleLinePx, linePxStr, iniPath);
+    char stackStr[4] = {};
+    _snprintf_s(stackStr, _TRUNCATE, "%d", g_state.stackChatBubbles ? 1 : 0);
+    WritePrivateProfileStringA(kConfigSection, kConfigKeyStackChatBubbles, stackStr, iniPath);
+    char stackMaxStr[8] = {};
+    _snprintf_s(stackMaxStr, _TRUNCATE, "%d", g_state.stackedChatBubbleMax);
+    WritePrivateProfileStringA(kConfigSection, kConfigKeyStackedChatBubbleMax, stackMaxStr, iniPath);
+    char stackMarginStr[8] = {};
+    _snprintf_s(stackMarginStr, _TRUNCATE, "%d", g_state.stackedChatBubbleMarginPx);
+    WritePrivateProfileStringA(
+        kConfigSection, kConfigKeyStackedChatBubbleMarginPx, stackMarginStr, iniPath);
 }
 
 DWORD WINAPI InitializePlugin(void*) {

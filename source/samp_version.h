@@ -63,5 +63,8 @@ struct SampVersionInfo {
     std::uint32_t chatBubbleRemoteChainLoadGuardRva;
     std::uint32_t chatBubbleRemoteChainPedGuardRva;
     std::uint8_t chatBubblePoolNullTrampKind;
+    // Аддитивная глобаль getChatBubbleHeight: Z += distanceToCamera * (A + height).
+    // Временный сдвиг этой константы поднимает баббл на distance*Δ — рычаг стопки вверх.
+    std::uint32_t chatBubbleHeightGlobalRva;
     std::uint16_t sampBubbleDrawTextLinePx;
 };
